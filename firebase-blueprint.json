@@ -1,0 +1,149 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private authenticated creator account profile storing non-public identity details and export count.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Creator display name from Google profile.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Private creator email address.",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Optional Google avatar URL.",
+          "maxLength": 500
+        },
+        "exportCount": {
+          "type": "number",
+          "description": "Cumulative count of weapon exports completed by this user."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the account record was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the account record was last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "email",
+        "exportCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SavedWeaponBuild": {
+      "title": "SavedWeaponBuild",
+      "description": "A modular 3D weapon configuration saved to a user's personal cloud armory.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Document ID matching ^[a-zA-Z0-9_\\-]+$.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the build owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable build name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "category": {
+          "type": "string",
+          "description": "Computed Godot 4.7.2 weapon class.",
+          "enum": [
+            "pistol",
+            "smg",
+            "assault_rifle",
+            "shotgun",
+            "sniper",
+            "lmg"
+          ]
+        },
+        "lengthCm": {
+          "type": "number",
+          "description": "Overall weapon length in centimeters."
+        },
+        "parts": {
+          "type": "object",
+          "description": "Selected variant IDs for all 9 weapon slots."
+        },
+        "dimensions": {
+          "type": "object",
+          "description": "Parametric shape dimensions map in meters/degrees."
+        },
+        "paints": {
+          "type": "object",
+          "description": "PBR paint and wear settings keyed by weapon slot."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the build was saved."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the build was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "name",
+        "category",
+        "lengthCm",
+        "parts",
+        "dimensions",
+        "paints",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserAccount"
+      },
+      "description": "Private user account profiles indexed by Firebase Auth UID (strictly owner-readable/writable, no list queries)."
+    },
+    "/users/{userId}/builds/{buildId}": {
+      "schema": {
+        "$ref": "#/entities/SavedWeaponBuild"
+      },
+      "description": "Private cloud armory weapon builds owned by {userId}."
+    }
+  }
+}

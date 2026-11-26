@@ -1,0 +1,197 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default-Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBoundedString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    // 3. Entity Validation Blueprints (Anti-Update-Gap: no existing()/diff() inside validators)
+    function isValidUserAccount(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'exportCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'exportCount', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.uid == userId
+        && isBoundedString(data.displayName, 1, 120)
+        && isBoundedString(data.email, 3, 200)
+        && (!('photoURL' in data) || isBoundedString(data.photoURL, 0, 500))
+        && data.exportCount is number
+        && data.exportCount >= 0
+        && data.exportCount <= 1000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function hasValidSlotKeys(m) {
+      return m is map
+        && m.keys().hasAll([
+          'receiver', 'barrel', 'handguard', 'stock',
+          'magazine', 'grip', 'muzzle', 'optic', 'underbarrel'
+        ])
+        && m.keys().hasOnly([
+          'receiver', 'barrel', 'handguard', 'stock',
+          'magazine', 'grip', 'muzzle', 'optic', 'underbarrel'
+        ]);
+    }
+
+    function isValidDimensionMap(d) {
+      return d is map
+        && d.keys().size() >= 1
+        && d.keys().size() <= 40
+        && d.keys().hasOnly([
+          'receiverLength', 'receiverHeight', 'receiverWidth', 'receiverRailHeight',
+          'barrelLength', 'barrelThickness', 'barrelOffsetY',
+          'handguardLength', 'handguardBulk', 'handguardHeight', 'handguardOffset',
+          'stockLength', 'stockWidth', 'stockDrop', 'stockButtHeight', 'stockCheekHeight',
+          'magLength', 'magCurve', 'magWidth', 'magAngle',
+          'gripLength', 'gripAngle', 'gripThickness',
+          'muzzleScale', 'muzzleLengthScale', 'muzzleDiameterScale',
+          'opticOffset', 'opticScale', 'opticMountHeight', 'opticLensScale',
+          'underbarrelOffset', 'underbarrelScale', 'underbarrelWidth', 'underbarrelDrop'
+        ]);
+    }
+
+    function isValidWeaponCategory(cat) {
+      return cat in ['pistol', 'smg', 'assault_rifle', 'shotgun', 'sniper', 'lmg'];
+    }
+
+    function isValidSavedBuild(data, userId, buildId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'name', 'category', 'lengthCm',
+          'parts', 'dimensions', 'paints', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'name', 'category', 'lengthCm',
+          'parts', 'dimensions', 'paints', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == buildId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isBoundedString(data.name, 1, 80)
+        && isValidWeaponCategory(data.category)
+        && data.lengthCm is number
+        && data.lengthCm >= 10
+        && data.lengthCm <= 250
+        && hasValidSlotKeys(data.parts)
+        && isValidDimensionMap(data.dimensions)
+        && hasValidSlotKeys(data.paints)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // 4. Master Gate Helper for User Subcollections
+    function parentAccountMatchesOwner(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId))
+        && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+    }
+
+    // 5. Private User Account Profiles (PII-isolated: owner only, no list allowed)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && isOwner(userId);
+
+      allow list: if false;
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().exportCount == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action A: Sync profile identity details
+          (incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'updatedAt'])
+            && incoming().exportCount == existing().exportCount) ||
+          // Action B: Increment export counter by 1 on verified export
+          (incoming().diff(existing()).affectedKeys().hasOnly(['exportCount', 'updatedAt'])
+            && incoming().exportCount == existing().exportCount + 1)
+        );
+
+      allow delete: if false;
+
+      // 6. Personal Cloud Armory Builds Subcollection
+      match /builds/{buildId} {
+        allow get: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(buildId)
+          && isOwner(userId)
+          && parentAccountMatchesOwner(userId);
+
+        // Zero get()/exists() inside list; directly binds query constraint to resource.data
+        allow list: if isSignedIn()
+          && isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(buildId)
+          && isOwner(userId)
+          && isValidSavedBuild(incoming(), userId, buildId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentAccountMatchesOwner(userId);
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(buildId)
+          && isOwner(userId)
+          && isValidSavedBuild(incoming(), userId, buildId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'category', 'lengthCm', 'parts', 'dimensions', 'paints', 'updatedAt'
+          ])
+          && parentAccountMatchesOwner(userId);
+
+        allow delete: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(buildId)
+          && isOwner(userId)
+          && parentAccountMatchesOwner(userId);
+      }
+    }
+  }
+}

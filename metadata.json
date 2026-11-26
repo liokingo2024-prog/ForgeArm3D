@@ -1,0 +1,8 @@
+{
+  "name": "ForgeArm 3D",
+  "description": "Interactive 3D parametric weapon gunsmith, PBR material studio, rig tester, and AI co-pilot with game-ready GLB export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
