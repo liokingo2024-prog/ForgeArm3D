@@ -35,6 +35,7 @@ interface Props {
   onExportGLB: (quality?: GlbExportQuality) => void;
   onExportGodotScene: (quality?: GlbExportQuality) => void;
   onSaveJSON: () => void;
+  onSaveRigDebugJSON: () => void;
   onLoadJSON: (file: File) => void;
   onOpenAccount: () => void;
 }
@@ -57,6 +58,7 @@ export function TopBar({
   onExportGLB,
   onExportGodotScene,
   onSaveJSON,
+  onSaveRigDebugJSON,
   onLoadJSON,
   onOpenAccount,
 }: Props) {
@@ -222,7 +224,7 @@ export function TopBar({
           </button>
 
           {fileMenuOpen && (
-            <div className="absolute right-0 mt-1.5 w-44 rounded-lg border border-[#262D3B] bg-[#12161F] p-1 shadow-xl">
+            <div className="absolute right-0 mt-1.5 w-52 rounded-lg border border-[#262D3B] bg-[#12161F] p-1 shadow-xl">
               <button
                 type="button"
                 title={
@@ -238,6 +240,25 @@ export function TopBar({
               >
                 <Download className="h-3.5 w-3.5 text-[#8A94A6] shrink-0" />
                 <span className="flex-1">Save JSON</span>
+                {!isSignedIn && (
+                  <Lock className="h-3 w-3 text-[#F59E0B] shrink-0" aria-hidden="true" />
+                )}
+              </button>
+              <button
+                type="button"
+                title={
+                  isSignedIn
+                    ? 'Debug hand bone positions, Euler rotations (rad/deg), and quaternions (<weapon_id>_rigdebug.json)'
+                    : 'Sign in with Google to export Hand Bones JSON'
+                }
+                onClick={() => {
+                  onSaveRigDebugJSON();
+                  setFileMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-[#DCE1EA] hover:bg-[#1B212E] transition-colors"
+              >
+                <Download className="h-3.5 w-3.5 text-[#34d399] shrink-0" />
+                <span className="flex-1">Save Hand Bones JSON</span>
                 {!isSignedIn && (
                   <Lock className="h-3 w-3 text-[#F59E0B] shrink-0" aria-hidden="true" />
                 )}

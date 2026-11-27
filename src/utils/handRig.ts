@@ -39,6 +39,16 @@ function round4(v: number): number {
   return Object.is(r, -0) ? 0 : r;
 }
 
+function round2(v: number): number {
+  const r = Math.round(v * 100) / 100;
+  return Object.is(r, -0) ? 0 : r;
+}
+
+function eulerToDegTuple(e: THREE.Euler): [number, number, number] {
+  const k = 180 / Math.PI;
+  return [round2(e.x * k), round2(e.y * k), round2(e.z * k)];
+}
+
 interface JointChainInput {
   wrist: THREE.Vector3;
   wristDorsalHint: THREE.Vector3;
@@ -119,6 +129,19 @@ function buildHandBonesFromJoints(
     hand_x_axis: [round4(handX.x), round4(handX.y), round4(handX.z)],
   };
 
+  const wristRotRad: [number, number, number] = [
+    round4(wristEuler.x),
+    round4(wristEuler.y),
+    round4(wristEuler.z),
+  ];
+  const wristRotDeg = eulerToDegTuple(wristEuler);
+  const wristQuatArr: [number, number, number, number] = [
+    round4(wristQuat.x),
+    round4(wristQuat.y),
+    round4(wristQuat.z),
+    round4(wristQuat.w),
+  ];
+
   bones[wristName] = {
     name: wristName,
     mixamo_name: `${MIXAMO_BONE_PREFIX}${wristName}`,
@@ -127,9 +150,13 @@ function buildHandBonesFromJoints(
     finger: 'wrist',
     phalanx: 0,
     position: [round4(input.wrist.x), round4(input.wrist.y), round4(input.wrist.z)],
-    rotation: [round4(wristEuler.x), round4(wristEuler.y), round4(wristEuler.z)],
-    quaternion: [round4(wristQuat.x), round4(wristQuat.y), round4(wristQuat.z), round4(wristQuat.w)],
+    rotation: wristRotRad,
+    rotation_deg: wristRotDeg,
+    quaternion: wristQuatArr,
     world_position: [round4(input.wrist.x), round4(input.wrist.y), round4(input.wrist.z)],
+    world_rotation: wristRotRad,
+    world_rotation_deg: wristRotDeg,
+    world_quaternion: wristQuatArr,
     bone_forward: [round4(wristY.x), round4(wristY.y), round4(wristY.z)],
     bone_normal: [round4(handX.x), round4(handX.y), round4(handX.z)],
   };
@@ -169,6 +196,7 @@ function buildHandBonesFromJoints(
       const localPos = worldPos.clone().sub(parentWorldPos).applyQuaternion(parentInv);
       const localQuat = parentInv.clone().multiply(worldQuat).normalize();
       const localEuler = new THREE.Euler().setFromQuaternion(localQuat, 'XYZ');
+      const worldEuler = new THREE.Euler().setFromQuaternion(worldQuat, 'XYZ');
 
       const worldFwd = new THREE.Vector3(0, 1, 0).applyQuaternion(worldQuat).normalize();
       const worldNorm = new THREE.Vector3(0, 0, 1).applyQuaternion(worldQuat).normalize();
@@ -182,8 +210,12 @@ function buildHandBonesFromJoints(
         phalanx,
         position: [round4(localPos.x), round4(localPos.y), round4(localPos.z)],
         rotation: [round4(localEuler.x), round4(localEuler.y), round4(localEuler.z)],
+        rotation_deg: eulerToDegTuple(localEuler),
         quaternion: [round4(localQuat.x), round4(localQuat.y), round4(localQuat.z), round4(localQuat.w)],
         world_position: [round4(worldPos.x), round4(worldPos.y), round4(worldPos.z)],
+        world_rotation: [round4(worldEuler.x), round4(worldEuler.y), round4(worldEuler.z)],
+        world_rotation_deg: eulerToDegTuple(worldEuler),
+        world_quaternion: [round4(worldQuat.x), round4(worldQuat.y), round4(worldQuat.z), round4(worldQuat.w)],
         bone_forward: [round4(worldFwd.x), round4(worldFwd.y), round4(worldFwd.z)],
         bone_normal: [round4(worldNorm.x), round4(worldNorm.y), round4(worldNorm.z)],
       };

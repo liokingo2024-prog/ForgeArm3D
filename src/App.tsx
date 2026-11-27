@@ -531,6 +531,30 @@ export default function App() {
     });
   }, [executeSaveJSON, requireSignedInForExport]);
 
+  const executeSaveRigDebugJSON = useCallback(() => {
+    const cfg = liveConfigRef.current;
+    const solved = resolveMechanicalConstraints(cfg);
+    const payload = buildWeaponRigDebugJson(cfg, solved);
+    const data = JSON.stringify(payload, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const slug = slugifyWeaponName(cfg.name);
+    a.href = url;
+    a.download = `${slug}_rigdebug.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    addToast(`Saved ${slug}_rigdebug.json (42 Mixamo hand bones + rotations)`, 'success');
+  }, [addToast]);
+
+  const handleSaveRigDebugJSON = useCallback(() => {
+    requireSignedInForExport(() => {
+      executeSaveRigDebugJSON();
+    });
+  }, [executeSaveRigDebugJSON, requireSignedInForExport]);
+
   const handleLoadJSON = useCallback(
     async (file: File) => {
       try {
@@ -590,6 +614,7 @@ export default function App() {
         onExportGLB={handleExportGLB}
         onExportGodotScene={handleExportGodotScene}
         onSaveJSON={handleSaveJSON}
+        onSaveRigDebugJSON={handleSaveRigDebugJSON}
         onLoadJSON={handleLoadJSON}
         onOpenAccount={() => openAuthModal('account')}
       />

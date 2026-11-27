@@ -479,6 +479,10 @@ test('WeaponRoot embeds full Mixamo RightHand & LeftHand bone trees across all 9
             : spec.bones[boneName].parent.replace(/^mixamorig1_/, '');
       assert.equal(bone.parent?.name, expectedParent);
       assert.equal(bone.userData.mixamo_name, `mixamorig1_${boneName}`);
+      assert.deepEqual(bone.userData.rotation, spec.bones[boneName].rotation);
+      assert.deepEqual(bone.userData.rotation_deg, spec.bones[boneName].rotation_deg);
+      assert.deepEqual(bone.userData.quaternion, spec.bones[boneName].quaternion);
+      assert.deepEqual(bone.userData.world_rotation_deg, spec.bones[boneName].world_rotation_deg);
 
       const worldPos = new THREE.Vector3();
       bone.getWorldPosition(worldPos);
@@ -491,6 +495,13 @@ test('WeaponRoot embeds full Mixamo RightHand & LeftHand bone trees across all 9
       assert.ok(
         rel.distanceTo(expected) < 0.001,
         `${label}.${boneName} Three.js world position (${rel.toArray()}) !== spec (${expected.toArray()})`
+      );
+      const worldQuat = new THREE.Quaternion();
+      bone.getWorldQuaternion(worldQuat);
+      const expectedWorldQuat = new THREE.Quaternion(...spec.bones[boneName].world_quaternion).normalize();
+      assert.ok(
+        Math.abs(worldQuat.dot(expectedWorldQuat)) > 0.999,
+        `${label}.${boneName} Three.js world quaternion mismatch`
       );
     }
 

@@ -812,6 +812,12 @@ export function buildWeaponRigDebugJson(
       finger: bone.finger,
       position: bone.position,
       rotation: bone.rotation,
+      rotation_deg: bone.rotation_deg,
+      quaternion: bone.quaternion,
+      world_position: bone.world_position,
+      world_rotation: bone.world_rotation,
+      world_rotation_deg: bone.world_rotation_deg,
+      world_quaternion: bone.world_quaternion,
     };
   }
   return {
@@ -823,6 +829,11 @@ export function buildWeaponRigDebugJson(
     mixamo_prefix: spec.mixamo_prefix,
     finger_axis: spec.finger_axis,
     bone_longitudinal_axis: spec.bone_longitudinal_axis,
+    rotation_order: 'XYZ',
+    rotation_units: {
+      rotation: 'radians',
+      rotation_deg: 'degrees',
+    },
     palm_offset_model: 'palm_centre = wrist + hand_bone_+Y * wrist_to_palm_distance',
     grips: spec.grips,
     bones: debugBones,

@@ -676,13 +676,34 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
   assert.deepEqual(roundTripped.dimensions, cfg.dimensions);
   assert.equal(roundTripped.name, cfg.name);
 
-  // Verify buildWeaponRigDebugJson emits separate debug payload cleanly
+  // Verify buildWeaponRigDebugJson emits separate debug payload cleanly with full bone rotations
   const debugJson = buildWeaponRigDebugJson(cfg, m);
   assert.equal(debugJson.game_must_not_load, true);
   assert.equal(debugJson.mixamo_prefix, 'mixamorig1_');
   assert.equal(debugJson.finger_axis, '+Y');
+  assert.equal(debugJson.rotation_order, 'XYZ');
+  assert.deepEqual(debugJson.rotation_units, { rotation: 'radians', rotation_deg: 'degrees' });
   assert.equal(debugJson.bones.RightHand.parent, 'mixamorig1_RightForeArm');
   assert.equal(debugJson.bones.LeftHand.parent, 'mixamorig1_LeftForeArm');
+  for (const b of Object.values(debugJson.bones)) {
+    assert.equal(b.rotation.length, 3);
+    assert.equal(b.rotation_deg.length, 3);
+    assert.equal(b.quaternion.length, 4);
+    assert.equal(b.world_rotation.length, 3);
+    assert.equal(b.world_rotation_deg.length, 3);
+    assert.equal(b.world_quaternion.length, 4);
+    for (const n of [...b.rotation, ...b.rotation_deg, ...b.quaternion, ...b.world_rotation, ...b.world_rotation_deg, ...b.world_quaternion]) {
+      assert.ok(Number.isFinite(n), `Debug bone ${b.name} has non-finite rotation field`);
+    }
+    const qFromEuler = new THREE.Quaternion().setFromEuler(new THREE.Euler(b.rotation[0], b.rotation[1], b.rotation[2], 'XYZ'));
+    const qStored = new THREE.Quaternion(...b.quaternion).normalize();
+    assert.ok(Math.abs(qFromEuler.dot(qStored)) > 0.9999, `${b.name} local Euler/quaternion mismatch`);
+    const qWorldEuler = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(b.world_rotation[0], b.world_rotation[1], b.world_rotation[2], 'XYZ')
+    );
+    const qWorldStored = new THREE.Quaternion(...b.world_quaternion).normalize();
+    assert.ok(Math.abs(qWorldEuler.dot(qWorldStored)) > 0.9999, `${b.name} world Euler/quaternion mismatch`);
+  }
 });
 
 test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scene, typed GDScript, and CRC-verified zip', () => {
@@ -878,15 +899,38 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
 
     for (const boneName of ALL_MIXAMO_HAND_BONE_NAMES) {
       const b = rig.bones[boneName];
-      for (const n of [...b.position, ...b.rotation, ...b.quaternion, ...b.world_position]) {
+      for (const n of [
+        ...b.position,
+        ...b.rotation,
+        ...b.rotation_deg,
+        ...b.quaternion,
+        ...b.world_position,
+        ...b.world_rotation,
+        ...b.world_rotation_deg,
+        ...b.world_quaternion,
+      ]) {
         assert.ok(Number.isFinite(n), `${entry.label}.${boneName} has non-finite transform component`);
       }
-      const fkPos = new THREE.Vector3().setFromMatrixPosition(resolveWorldMat(boneName));
+      const fkMat = resolveWorldMat(boneName);
+      const fkPos = new THREE.Vector3().setFromMatrixPosition(fkMat);
       const expected = new THREE.Vector3(...b.world_position);
       assert.ok(
         fkPos.distanceTo(expected) < 0.001,
         `${entry.label}.${boneName} FK position mismatch: ${fkPos.distanceTo(expected)}`
       );
+      const fkQuat = new THREE.Quaternion().setFromRotationMatrix(fkMat).normalize();
+      const expectedQuat = new THREE.Quaternion(...b.world_quaternion).normalize();
+      assert.ok(
+        Math.abs(fkQuat.dot(expectedQuat)) > 0.999,
+        `${entry.label}.${boneName} FK rotation mismatch: dot=${fkQuat.dot(expectedQuat)}`
+      );
+      for (let axisIdx = 0; axisIdx < 3; axisIdx++) {
+        const expectedLocalDeg = (b.rotation[axisIdx] * 180) / Math.PI;
+        assert.ok(
+          Math.abs(b.rotation_deg[axisIdx] - expectedLocalDeg) < 0.05,
+          `${entry.label}.${boneName} rotation_deg[${axisIdx}] mismatch`
+        );
+      }
     }
 
     for (const side of ['Right', 'Left'] as const) {

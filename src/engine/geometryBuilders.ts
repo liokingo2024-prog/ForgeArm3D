@@ -4704,6 +4704,12 @@ export function buildWeaponSceneGraph(
         hand: spec.hand,
         finger: spec.finger,
         phalanx: spec.phalanx,
+        rotation: spec.rotation,
+        rotation_deg: spec.rotation_deg,
+        quaternion: spec.quaternion,
+        world_rotation: spec.world_rotation,
+        world_rotation_deg: spec.world_rotation_deg,
+        world_quaternion: spec.world_quaternion,
       };
       bone.position.set(spec.position[0], spec.position[1], spec.position[2]);
       bone.quaternion.set(

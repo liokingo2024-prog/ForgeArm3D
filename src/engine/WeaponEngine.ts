@@ -314,6 +314,8 @@ export class WeaponEngine {
   private handBoneLines: THREE.LineSegments | null = null;
   private handBonePairs: Array<[THREE.Bone, THREE.Bone]> = [];
   private handBoneGizmos: THREE.Mesh[] = [];
+  private hoveredBoneAxisGizmo: THREE.LineSegments | null = null;
+  private hoveredBoneName: string | null = null;
   private rigOverlayEnabled = false;
   private wireframeEnabled = false;
 
@@ -673,7 +675,7 @@ export class WeaponEngine {
   }
 
   private pickBoneGizmo(e: PointerEvent | MouseEvent): HoveredRigBoneInfo | null {
-    if (!this.rigOverlayEnabled || this.handBoneGizmos.length === 0) return null;
+    if (!this.rigOverlayEnabled || !this.rig || this.handBoneGizmos.length === 0) return null;
     this.updatePointerNDC(e);
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hits = this.raycaster.intersectObjects(this.handBoneGizmos, false);
@@ -683,6 +685,35 @@ export class WeaponEngine {
     const mixamoName = obj.userData.mixamoName as string | undefined;
     const hand = obj.userData.hand as 'left' | 'right' | undefined;
     if (!name || !mixamoName || !hand) return null;
+    const bone = this.rig.handBones.get(name);
+    const radToDeg = 180 / Math.PI;
+    const round2 = (v: number) => {
+      const r = Math.round(v * 100) / 100;
+      return Object.is(r, -0) ? 0 : r;
+    };
+    const round4 = (v: number) => {
+      const r = Math.round(v * 1e4) / 1e4;
+      return Object.is(r, -0) ? 0 : r;
+    };
+    const rotationRad = (bone?.userData.rotation as [number, number, number] | undefined) ?? [
+      round4(bone?.rotation.x ?? 0),
+      round4(bone?.rotation.y ?? 0),
+      round4(bone?.rotation.z ?? 0),
+    ];
+    const rotationDeg = (bone?.userData.rotation_deg as [number, number, number] | undefined) ?? [
+      round2(rotationRad[0] * radToDeg),
+      round2(rotationRad[1] * radToDeg),
+      round2(rotationRad[2] * radToDeg),
+    ];
+    const worldRotationDeg =
+      (bone?.userData.world_rotation_deg as [number, number, number] | undefined) ?? rotationDeg;
+    const quaternion = (bone?.userData.quaternion as [number, number, number, number] | undefined) ?? [
+      round4(bone?.quaternion.x ?? 0),
+      round4(bone?.quaternion.y ?? 0),
+      round4(bone?.quaternion.z ?? 0),
+      round4(bone?.quaternion.w ?? 1),
+    ];
+
     const rect = this.renderer.domElement.getBoundingClientRect();
     return {
       name,
@@ -690,6 +721,10 @@ export class WeaponEngine {
       hand,
       screenX: e.clientX - rect.left,
       screenY: e.clientY - rect.top,
+      rotationRad,
+      rotationDeg,
+      worldRotationDeg,
+      quaternion,
     };
   }
 
@@ -705,6 +740,22 @@ export class WeaponEngine {
 
     const hitBone = this.pickBoneGizmo(e);
     this.callbacks.onHoverBone?.(hitBone);
+
+    const nextBoneName = hitBone?.name ?? null;
+    if (nextBoneName !== this.hoveredBoneName) {
+      this.hoveredBoneName = nextBoneName;
+      if (this.hoveredBoneAxisGizmo) {
+        const targetBone = nextBoneName ? this.rig?.handBones.get(nextBoneName) : undefined;
+        if (targetBone) {
+          this.hoveredBoneAxisGizmo.userData.trackTarget = targetBone;
+          this.hoveredBoneAxisGizmo.visible = true;
+        } else {
+          this.hoveredBoneAxisGizmo.userData.trackTarget = undefined;
+          this.hoveredBoneAxisGizmo.visible = false;
+        }
+        this.requestRender();
+      }
+    }
 
     const hitSlot = this.pickSlot(e);
     const dom = this.renderer.domElement;
@@ -747,6 +798,14 @@ export class WeaponEngine {
 
   private onPointerLeave = (): void => {
     this.callbacks.onHoverBone?.(null);
+    if (this.hoveredBoneName !== null) {
+      this.hoveredBoneName = null;
+      if (this.hoveredBoneAxisGizmo) {
+        this.hoveredBoneAxisGizmo.userData.trackTarget = undefined;
+        this.hoveredBoneAxisGizmo.visible = false;
+        this.requestRender();
+      }
+    }
     if (this.hovered3DSlot) {
       this.hovered3DSlot = null;
       this.callbacks.onHoverSlot(null);
@@ -1120,12 +1179,41 @@ export class WeaponEngine {
     return g;
   }
 
+  private buildBoneAxisTriad(axisLen: number): THREE.LineSegments {
+    const positions = new Float32Array([
+      0, 0, 0, axisLen, 0, 0,
+      0, 0, 0, 0, axisLen * 1.25, 0,
+      0, 0, 0, 0, 0, axisLen,
+    ]);
+    const colors = new Float32Array([
+      0.96, 0.28, 0.34, 0.96, 0.28, 0.34, // +X bone lateral
+      0.22, 0.88, 0.48, 0.22, 0.88, 0.48, // +Y longitudinal bone axis
+      0.26, 0.68, 0.98, 0.26, 0.68, 0.98, // +Z bone normal/hinge
+    ]);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const lines = new THREE.LineSegments(
+      geo,
+      new THREE.LineBasicMaterial({
+        vertexColors: true,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.92,
+      })
+    );
+    lines.renderOrder = 1002;
+    return lines;
+  }
+
   private rebuildRigGizmos(): void {
     this.disposeObjectGeometries(this.rigGizmoGroup);
     this.rigGizmoGroup.clear();
     this.handBoneLines = null;
     this.handBonePairs = [];
     this.handBoneGizmos = [];
+    this.hoveredBoneAxisGizmo = null;
+    this.hoveredBoneName = null;
     if (!this.rig) return;
 
     for (const spec of this.getSocketOverlaySpecs()) {
@@ -1134,7 +1222,7 @@ export class WeaponEngine {
       this.rigGizmoGroup.add(gizmo);
     }
 
-    // Articulated Mixamo hand bone joint spheres & connecting bone segments
+    // Articulated Mixamo hand bone joint spheres, local rotation triads, & connecting segments
     const wristMatR = new THREE.MeshBasicMaterial({
       color: '#34d399',
       depthTest: false,
@@ -1180,6 +1268,7 @@ export class WeaponEngine {
       wMesh.userData.boneName = wristName;
       wMesh.userData.mixamoName = `${MIXAMO_BONE_PREFIX}${wristName}`;
       wMesh.userData.hand = side.toLowerCase();
+      wMesh.add(this.buildBoneAxisTriad(0.024));
       this.rigGizmoGroup.add(wMesh);
       this.handBoneGizmos.push(wMesh);
 
@@ -1207,6 +1296,11 @@ export class WeaponEngine {
         }
       }
     }
+
+    const hoverTriad = this.buildBoneAxisTriad(0.02);
+    hoverTriad.visible = false;
+    this.hoveredBoneAxisGizmo = hoverTriad;
+    this.rigGizmoGroup.add(hoverTriad);
 
     if (pairs.length > 0) {
       this.handBonePairs = pairs;
@@ -1327,6 +1421,7 @@ export class WeaponEngine {
         x: ((_vec3.x + 1) * 0.5) * w,
         y: ((-_vec3.y + 1) * 0.5) * h,
         visible: _vec3.z >= -1 && _vec3.z <= 1,
+        rotationDeg: wrist.userData.rotation_deg as [number, number, number] | undefined,
       });
     }
 

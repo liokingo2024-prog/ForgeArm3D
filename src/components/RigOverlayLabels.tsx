@@ -28,7 +28,11 @@ export function RigOverlayLabels({ nodes, hoveredBone }: Props) {
     placed.push({ node, x: lx, y: ly });
   }
 
+  const rightWrist = visible.find((n) => n.name === 'RightHand');
   const leftWrist = visible.find((n) => n.name === 'LeftHand');
+
+  const fmtDeg = (deg?: [number, number, number]) =>
+    deg ? `${deg[0].toFixed(1)}°, ${deg[1].toFixed(1)}°, ${deg[2].toFixed(1)}°` : '0.0°, 0.0°, 0.0°';
 
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden z-10">
@@ -47,6 +51,11 @@ export function RigOverlayLabels({ nodes, hoveredBone }: Props) {
             aria-hidden="true"
           />
           <span>{node.shortLabel}</span>
+          {node.kind === 'bone' && node.rotationDeg && (
+            <span className="text-[#94A3B8]">
+              ({node.rotationDeg[0].toFixed(0)}°, {node.rotationDeg[1].toFixed(0)}°, {node.rotationDeg[2].toFixed(0)}°)
+            </span>
+          )}
         </div>
       ))}
 
@@ -57,15 +66,26 @@ export function RigOverlayLabels({ nodes, hoveredBone }: Props) {
               hoveredBone.screenY - 12
             )}px)`,
           }}
-          className="absolute left-0 top-0 z-30 rounded-md border border-[#2C3545] bg-[#0B0E14]/96 px-2 py-1 text-[11px] font-mono-tabular text-[#EDF0F5] shadow-lg whitespace-nowrap"
+          className="absolute left-0 top-0 z-30 flex flex-col gap-0.5 rounded-md border border-[#2C3545] bg-[#0B0E14]/96 px-2.5 py-1.5 text-[11px] font-mono-tabular text-[#EDF0F5] shadow-lg whitespace-nowrap"
         >
-          <span
-            className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
-            style={{ backgroundColor: hoveredBone.hand === 'right' ? '#34d399' : '#22d3ee' }}
-            aria-hidden="true"
-          />
-          <span className="font-semibold">{hoveredBone.mixamoName}</span>
-          <span className="ml-1.5 text-[#8A95A8]">({hoveredBone.name})</span>
+          <div>
+            <span
+              className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
+              style={{ backgroundColor: hoveredBone.hand === 'right' ? '#34d399' : '#22d3ee' }}
+              aria-hidden="true"
+            />
+            <span className="font-semibold">{hoveredBone.mixamoName}</span>
+            <span className="ml-1.5 text-[#8A95A8]">({hoveredBone.name})</span>
+          </div>
+          <div className="text-[10px] text-[#B8C2D4]">
+            Local Rot (XYZ): <span className="text-[#F3F5F8]">{fmtDeg(hoveredBone.rotationDeg)}</span>
+          </div>
+          <div className="text-[10px] text-[#B8C2D4]">
+            Weapon Rot (XYZ): <span className="text-[#F3F5F8]">{fmtDeg(hoveredBone.worldRotationDeg)}</span>
+          </div>
+          <div className="text-[10px] text-[#8A95A8]">
+            Quat: [{hoveredBone.quaternion.map((q) => q.toFixed(3)).join(', ')}]
+          </div>
         </div>
       )}
 
@@ -73,6 +93,9 @@ export function RigOverlayLabels({ nodes, hoveredBone }: Props) {
         <div className="flex items-center gap-2 font-mono-tabular">
           <span className="h-1.5 w-1.5 rounded-full bg-[#34d399]" aria-hidden="true" />
           <span className="text-[#EDF0F5] font-medium">mixamorig1_RightHand</span>
+          {rightWrist?.rotationDeg && (
+            <span className="text-[#34d399]">rot [{fmtDeg(rightWrist.rotationDeg)}]</span>
+          )}
           <span className="text-[#8A95A8]">→ Thumb1..4 · Index1..4 · Middle1..4 · Ring1..4 · Pinky1..4</span>
         </div>
         <div className="flex items-center gap-2 font-mono-tabular">
@@ -80,7 +103,10 @@ export function RigOverlayLabels({ nodes, hoveredBone }: Props) {
           <span className="text-[#EDF0F5] font-medium">
             {leftWrist?.shortLabel ?? 'mixamorig1_LeftHand'}
           </span>
-          <span className="text-[#8A95A8]">→ Hover joint to inspect bone</span>
+          {leftWrist?.rotationDeg && (
+            <span className="text-[#22d3ee]">rot [{fmtDeg(leftWrist.rotationDeg)}]</span>
+          )}
+          <span className="text-[#8A95A8]">→ Hover joint to inspect bone rotation</span>
         </div>
       </div>
     </div>

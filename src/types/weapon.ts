@@ -326,8 +326,12 @@ export interface HandBoneNodeSpec {
   phalanx: 0 | 1 | 2 | 3 | 4;
   position: [number, number, number];
   rotation: [number, number, number];
+  rotation_deg: [number, number, number];
   quaternion: [number, number, number, number];
   world_position: [number, number, number];
+  world_rotation: [number, number, number];
+  world_rotation_deg: [number, number, number];
+  world_quaternion: [number, number, number, number];
   bone_forward: [number, number, number];
   bone_normal: [number, number, number];
 }
@@ -390,6 +394,11 @@ export interface WeaponRigDebugExport {
   mixamo_prefix: 'mixamorig1_';
   finger_axis: '+Y';
   bone_longitudinal_axis: '+Y';
+  rotation_order: 'XYZ';
+  rotation_units: {
+    rotation: 'radians';
+    rotation_deg: 'degrees';
+  };
   palm_offset_model: string;
   grips: {
     right: GripSolveVectors;
@@ -405,6 +414,12 @@ export interface WeaponRigDebugExport {
       finger: HandFingerName;
       position: [number, number, number];
       rotation: [number, number, number];
+      rotation_deg: [number, number, number];
+      quaternion: [number, number, number, number];
+      world_position: [number, number, number];
+      world_rotation: [number, number, number];
+      world_rotation_deg: [number, number, number];
+      world_quaternion: [number, number, number, number];
     }
   >;
 }
@@ -423,6 +438,7 @@ export interface ProjectedRigNode {
   x: number;
   y: number;
   visible: boolean;
+  rotationDeg?: [number, number, number];
 }
 
 export interface HoveredPartInfo {
@@ -437,6 +453,10 @@ export interface HoveredRigBoneInfo {
   hand: HandSide;
   screenX: number;
   screenY: number;
+  rotationRad: [number, number, number];
+  rotationDeg: [number, number, number];
+  worldRotationDeg: [number, number, number];
+  quaternion: [number, number, number, number];
 }
 
 export interface DimensionSliderSpec {
