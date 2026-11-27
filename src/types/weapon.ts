@@ -224,6 +224,7 @@ export interface ResolvedMechanics {
   socketMuzzlePos: Vec3Tuple;
   socketEjectPos: Vec3Tuple;
   socketAdsPos: Vec3Tuple;
+  rightGripSurfaceHalfW: number;
   socketHandRPos: Vec3Tuple;
   socketHandRForward: Vec3Tuple;
   socketHandRUp: Vec3Tuple;
@@ -286,33 +287,13 @@ export type GodotSocketRole =
 export interface GodotSocketTransform {
   position: [number, number, number];
   rotation: [number, number, number];
-  grip_forward: [number, number, number];
-  grip_up: [number, number, number];
+  wrist_offset_weapon_space?: [number, number, number];
+  hand_y_axis?: [number, number, number];
+  hand_x_axis?: [number, number, number];
+  grip_forward?: [number, number, number];
+  grip_up?: [number, number, number];
   contact_normal?: [number, number, number];
-  socket_role: GodotSocketRole;
-}
-
-export interface GodotHandOrientationSpec {
-  socket_semantics: 'grip_contact_point';
-  is_joint: false;
-  applies_palm_offset: 'runtime_outward_along_contact_normal';
-  description: string;
-  coordinate_system: {
-    forward: '-Z';
-    up: '+Y';
-    right: '+X';
-    units: 'meters';
-    origin: 'pistol_grip_center_pivot';
-  };
-  socket_basis_axes: {
-    grip_forward: 'socket_local_-Z_finger_extension_and_wrap_forward';
-    grip_up: 'socket_local_+Y_thumb_and_radial_hand_up';
-    right_hand_contact_normal: 'socket_local_+X_outward_from_grip_to_palm';
-    left_hand_contact_normal: 'socket_local_-X_outward_from_grip_to_palm';
-  };
-  finger_axis: '-Z';
-  up_axis: '+Y';
-  solve_note: string;
+  socket_role?: GodotSocketRole;
 }
 
 export type HandSide = 'left' | 'right';
@@ -351,23 +332,33 @@ export interface HandBoneNodeSpec {
   bone_normal: [number, number, number];
 }
 
+export interface GripSolveVectors {
+  wrist_offset_weapon_space: [number, number, number];
+  hand_y_axis: [number, number, number];
+  hand_x_axis: [number, number, number];
+}
+
 export interface GodotHandRigSpec {
   naming_convention: 'mixamo';
-  mixamo_prefix: 'mixamorig:';
+  mixamo_prefix: 'mixamorig1_';
+  finger_axis: '+Y';
   bone_longitudinal_axis: '+Y';
   wrist_bones: {
     right: 'RightHand';
     left: 'LeftHand';
   };
   wrist_mixamo_names: {
-    right: 'mixamorig:RightHand';
-    left: 'mixamorig:LeftHand';
+    right: 'mixamorig1_RightHand';
+    left: 'mixamorig1_LeftHand';
   };
-  total_bones: number;
   right_grip_style: 'pistol_grip';
   left_grip_style: LeftGripStyle;
   left_grip_placement: LeftGripPlacement;
   underbarrel_variant: UnderbarrelVariant;
+  grips: {
+    right: GripSolveVectors;
+    left: GripSolveVectors;
+  };
   bones: Record<string, HandBoneNodeSpec>;
 }
 
@@ -377,18 +368,45 @@ export interface GodotWeaponMetadata {
   category: GodotWeaponCategory;
   forward_axis: '-Z';
   units: 'meters';
-  hand_orientation: GodotHandOrientationSpec;
-  hand_rig: GodotHandRigSpec;
+  socket_semantics: 'grip_contact_point';
+  is_joint: false;
   stats: GodotWeaponStats;
-  sockets: Record<string, GodotSocketTransform>;
-  movable_parts: string[];
   dimensions_m: [number, number, number];
+  movable_parts: string[];
+  sockets: Record<string, GodotSocketTransform>;
 }
 
 export interface WeaponJsonExport extends GodotWeaponMetadata {
   parts: WeaponParts;
   dimensions: WeaponDimensions;
   paints: WeaponPaints;
+}
+
+export interface WeaponRigDebugExport {
+  warning: string;
+  game_must_not_load: true;
+  weapon_id: string;
+  naming_convention: 'mixamo';
+  mixamo_prefix: 'mixamorig1_';
+  finger_axis: '+Y';
+  bone_longitudinal_axis: '+Y';
+  palm_offset_model: string;
+  grips: {
+    right: GripSolveVectors;
+    left: GripSolveVectors;
+  };
+  bones: Record<
+    string,
+    {
+      name: string;
+      mixamo_name: string;
+      parent: string;
+      hand: HandSide;
+      finger: HandFingerName;
+      position: [number, number, number];
+      rotation: [number, number, number];
+    }
+  >;
 }
 
 export interface ViewportTelemetry {

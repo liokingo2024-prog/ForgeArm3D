@@ -53,6 +53,7 @@ import {
   buildGodotBundleFilename,
   buildStoreZip,
   buildWeaponJsonExport,
+  buildWeaponRigDebugJson,
   computeGodotWeaponCategory,
   generateGodotSceneTscn,
   generateGodotScriptGd,
@@ -444,6 +445,7 @@ export default function App() {
         const scriptFilename = `${weaponId}.gd`;
 
         const jsonExport = buildWeaponJsonExport(cfg, solved, metadata.dimensions_m);
+        const rigDebugExport = buildWeaponRigDebugJson(cfg, solved);
         const tscnText = generateGodotSceneTscn(
           cfg,
           solved,
@@ -453,11 +455,13 @@ export default function App() {
         );
         const gdText = generateGodotScriptGd(metadata);
         const jsonText = JSON.stringify(jsonExport, null, 2);
+        const rigDebugText = JSON.stringify(rigDebugExport, null, 2);
 
         const encoder = new TextEncoder();
         const zipBytes = buildStoreZip([
           { name: `${weaponId}/${glbFilename}`, data: glbBytes },
           { name: `${weaponId}/${jsonFilename}`, data: encoder.encode(jsonText) },
+          { name: `${weaponId}/${weaponId}_rigdebug.json`, data: encoder.encode(rigDebugText) },
           { name: `${weaponId}/preview.png`, data: previewPngBytes },
           { name: `${weaponId}/${tscnFilename}`, data: encoder.encode(tscnText) },
           { name: `${weaponId}/${scriptFilename}`, data: encoder.encode(gdText) },

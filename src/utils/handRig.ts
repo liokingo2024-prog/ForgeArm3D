@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   GodotHandRigSpec,
+  GripSolveVectors,
   HandBoneNodeSpec,
   HandFingerName,
   HandSide,
@@ -12,6 +13,8 @@ import { clamp } from './weaponLogic';
 
 export const MIXAMO_FINGERS = ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky'] as const;
 export type MixamoFingerTitle = (typeof MIXAMO_FINGERS)[number];
+
+export const MIXAMO_BONE_PREFIX = 'mixamorig1_';
 
 export function getMixamoHandBoneNames(side: 'Right' | 'Left'): string[] {
   const wrist = `${side}Hand`;
@@ -50,14 +53,15 @@ interface JointChainInput {
 
 /**
  * Computes orthonormal world bone orientations following the Mixamo +Y longitudinal bone convention
- * (+Y points from parent joint to child joint; +Z points dorsal/outward; +X is the flexion hinge axis),
+ * (+Y points from parent joint to child joint; +Z points dorsal/thumbward; +X is dorsal on RightHand / palmar on LeftHand),
  * then derives exact parent-relative translation, quaternion, and XYZ Euler rotation.
  */
 function buildHandBonesFromJoints(
   side: 'Right' | 'Left',
-  rigRootName: string,
+  forearmParentMixamoName: string,
+  socketPosRelOrigin: THREE.Vector3,
   input: JointChainInput
-): Record<string, HandBoneNodeSpec> {
+): { bones: Record<string, HandBoneNodeSpec>; gripSolve: GripSolveVectors } {
   const hand: HandSide = side === 'Right' ? 'right' : 'left';
   const wristName = `${side}Hand`;
   const bones: Record<string, HandBoneNodeSpec> = {};
@@ -79,25 +83,46 @@ function buildHandBonesFromJoints(
     return new THREE.Quaternion().setFromRotationMatrix(m);
   };
 
-  // Wrist orientation: +Y toward Middle1 MCP knuckle, +Z dorsal outward hint
+  // Wrist orientation:
+  // +Y_hand = wrist -> Middle1 MCP knuckle (longitudinal axis, finger_axis: "+Y")
+  // +X_hand = dorsal orthogonalized for RightHand, palmar (-dorsal) orthogonalized for LeftHand
+  // +Z_hand = X × Y (thumb / radial up for both hands)
   const middleKnuckle = input.fingers.Middle.points[0];
   const wristY = middleKnuckle.clone().sub(input.wrist).normalize();
-  const dorsal = input.wristDorsalHint.clone().normalize();
-  let wristX = new THREE.Vector3().crossVectors(wristY, dorsal);
-  if (wristX.lengthSq() < 1e-6) {
-    wristX = new THREE.Vector3(0, 0, 1);
+  const handXHint =
+    side === 'Right'
+      ? input.wristDorsalHint.clone().normalize()
+      : input.wristDorsalHint.clone().negate().normalize();
+
+  let handX = handXHint.clone().addScaledVector(wristY, -handXHint.dot(wristY));
+  if (handX.lengthSq() < 1e-6) {
+    const fallback = Math.abs(wristY.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    handX = new THREE.Vector3().crossVectors(wristY, fallback);
   }
-  wristX.normalize();
-  const wristZ = new THREE.Vector3().crossVectors(wristX, wristY).normalize();
+  handX.normalize();
+  const handZ = new THREE.Vector3().crossVectors(handX, wristY).normalize();
+  handX.crossVectors(wristY, handZ).normalize();
+
   const wristQuat = new THREE.Quaternion().setFromRotationMatrix(
-    new THREE.Matrix4().makeBasis(wristX, wristY, wristZ)
+    new THREE.Matrix4().makeBasis(handX, wristY, handZ)
   );
   const wristEuler = new THREE.Euler().setFromQuaternion(wristQuat, 'XYZ');
 
+  const wristOffset = input.wrist.clone().sub(socketPosRelOrigin);
+  const gripSolve: GripSolveVectors = {
+    wrist_offset_weapon_space: [
+      round4(wristOffset.x),
+      round4(wristOffset.y),
+      round4(wristOffset.z),
+    ],
+    hand_y_axis: [round4(wristY.x), round4(wristY.y), round4(wristY.z)],
+    hand_x_axis: [round4(handX.x), round4(handX.y), round4(handX.z)],
+  };
+
   bones[wristName] = {
     name: wristName,
-    mixamo_name: `mixamorig:${wristName}`,
-    parent: rigRootName,
+    mixamo_name: `${MIXAMO_BONE_PREFIX}${wristName}`,
+    parent: forearmParentMixamoName,
     hand,
     finger: 'wrist',
     phalanx: 0,
@@ -106,7 +131,7 @@ function buildHandBonesFromJoints(
     quaternion: [round4(wristQuat.x), round4(wristQuat.y), round4(wristQuat.z), round4(wristQuat.w)],
     world_position: [round4(input.wrist.x), round4(input.wrist.y), round4(input.wrist.z)],
     bone_forward: [round4(wristY.x), round4(wristY.y), round4(wristY.z)],
-    bone_normal: [round4(wristZ.x), round4(wristZ.y), round4(wristZ.z)],
+    bone_normal: [round4(handX.x), round4(handX.y), round4(handX.z)],
   };
 
   for (const fingerTitle of MIXAMO_FINGERS) {
@@ -124,7 +149,7 @@ function buildHandBonesFromJoints(
           : planeCross.negate().normalize()
         : hingeHint.clone().normalize();
 
-    let parentName = wristName;
+    let parentShortName = wristName;
     let parentWorldPos = input.wrist;
     let parentWorldQuat = wristQuat;
 
@@ -150,8 +175,8 @@ function buildHandBonesFromJoints(
 
       bones[boneName] = {
         name: boneName,
-        mixamo_name: `mixamorig:${boneName}`,
-        parent: parentName,
+        mixamo_name: `${MIXAMO_BONE_PREFIX}${boneName}`,
+        parent: `${MIXAMO_BONE_PREFIX}${parentShortName}`,
         hand,
         finger: fingerKey,
         phalanx,
@@ -163,18 +188,18 @@ function buildHandBonesFromJoints(
         bone_normal: [round4(worldNorm.x), round4(worldNorm.y), round4(worldNorm.z)],
       };
 
-      parentName = boneName;
+      parentShortName = boneName;
       parentWorldPos = worldPos;
       parentWorldQuat = worldQuat;
     }
   }
 
-  return bones;
+  return { bones, gripSolve };
 }
 
 /**
- * Resolves full Mixamo-standard 42-bone gripping hand hierarchies (RightHand + 5x4 fingers,
- * LeftHand + 5x4 fingers) in WeaponRoot coordinates (origin = gripPivotPos = (0,0,0), -Z forward, +Y up, meters).
+ * Resolves Mixamo-standard gripping hand hierarchies and weapon-space grip vectors
+ * in WeaponRoot coordinates (origin = gripPivotPos = (0,0,0), -Z forward, +Y up, meters).
  */
 export function resolveMixamoHandRig(
   config: WeaponConfig,
@@ -190,7 +215,7 @@ export function resolveMixamoHandRig(
   const rUp = new THREE.Vector3(m.socketHandRUp.x, m.socketHandRUp.y, m.socketHandRUp.z).normalize();
   const rFwd = new THREE.Vector3(m.socketHandRForward.x, m.socketHandRForward.y, m.socketHandRForward.z).normalize();
 
-  const gripHalfW = Math.max(0.014, m.socketHandRPos.x);
+  const gripHalfW = Math.max(0.014, m.rightGripSurfaceHalfW);
   const gripLenScale = clamp(d.gripLength / 0.106, 0.84, 1.15);
   const gripPoint = (r: number, u: number, f: number): THREE.Vector3 =>
     new THREE.Vector3()
@@ -198,14 +223,12 @@ export function resolveMixamoHandRig(
       .addScaledVector(rUp, u * gripLenScale)
       .addScaledVector(rFwd, f);
 
-  // Outer clearances around grip mesh (frontstrap grooves peak ~0.0245m, backstrap ~0.028m)
   const rFrontClear = 0.0285;
   const rRightKnuckle = gripHalfW + 0.011;
   const rLeftWrap = -(gripHalfW + 0.007);
 
   const rightWrist = gripPoint(gripHalfW + 0.022, -0.021, -0.056);
 
-  // Trigger pad world position relative to WeaponRoot origin (0,0,0)
   const trigOriginRel = new THREE.Vector3(
     m.triggerPivotPos.x - origin.x,
     m.triggerPivotPos.y - origin.y,
@@ -282,6 +305,11 @@ export function resolveMixamoHandRig(
   let leftGripStyle: LeftGripStyle = 'handguard_cradle';
   let leftJoints: JointChainInput;
 
+  const handRRel = new THREE.Vector3(
+    m.socketHandRPos.x - origin.x,
+    m.socketHandRPos.y - origin.y,
+    m.socketHandRPos.z - origin.z
+  );
   const handLRel = new THREE.Vector3(
     m.socketHandLPos.x - origin.x,
     m.socketHandLPos.y - origin.y,
@@ -305,7 +333,7 @@ export function resolveMixamoHandRig(
     const vRightWrap = shaftR + 0.0075;
 
     leftJoints = {
-      wrist: new THREE.Vector3(-(shaftR + 0.023), cy - 0.021 * vLenScale, cz + 0.056),
+      wrist: new THREE.Vector3(-(shaftR + 0.023), cy - 0.014 * vLenScale, cz + 0.058),
       wristDorsalHint: new THREE.Vector3(-1, 0, 0),
       fingers: {
         Thumb: {
@@ -319,37 +347,37 @@ export function resolveMixamoHandRig(
         },
         Index: {
           points: [
-            vPt(vLeftK, 0.023, -0.008),
-            vPt(0.002, 0.023, vFrontClear),
-            vPt(vRightWrap, 0.022, -0.004),
-            vPt(shaftR + 0.005, 0.021, 0.014),
+            vPt(vLeftK, 0.021, -0.016),
+            vPt(0.002, 0.021, vFrontClear),
+            vPt(vRightWrap, 0.020, -0.005),
+            vPt(shaftR + 0.005, 0.019, 0.013),
           ],
           hingeHint: new THREE.Vector3(0, 1, 0),
         },
         Middle: {
           points: [
-            vPt(vLeftK, 0.007, -0.008),
-            vPt(0.003, 0.007, vFrontClear - 0.001),
-            vPt(vRightWrap + 0.0005, 0.006, -0.003),
-            vPt(shaftR + 0.0055, 0.005, 0.015),
+            vPt(vLeftK, 0.004, -0.016),
+            vPt(0.003, 0.004, vFrontClear - 0.001),
+            vPt(vRightWrap + 0.0005, 0.003, -0.004),
+            vPt(shaftR + 0.0055, 0.002, 0.014),
           ],
           hingeHint: new THREE.Vector3(0, 1, 0),
         },
         Ring: {
           points: [
-            vPt(vLeftK + 0.001, -0.010, -0.006),
-            vPt(0.002, -0.010, vFrontClear),
-            vPt(vRightWrap, -0.011, -0.002),
-            vPt(shaftR + 0.005, -0.012, 0.014),
+            vPt(vLeftK + 0.001, -0.012, -0.012),
+            vPt(0.002, -0.012, vFrontClear),
+            vPt(vRightWrap, -0.013, -0.003),
+            vPt(shaftR + 0.005, -0.014, 0.013),
           ],
           hingeHint: new THREE.Vector3(0, 1, 0),
         },
         Pinky: {
           points: [
-            vPt(vLeftK + 0.002, -0.025, -0.004),
-            vPt(0.001, -0.025, vFrontClear + 0.002),
-            vPt(vRightWrap - 0.001, -0.026, 0.000),
-            vPt(shaftR + 0.004, -0.026, 0.012),
+            vPt(vLeftK + 0.002, -0.027, -0.008),
+            vPt(0.001, -0.027, vFrontClear + 0.002),
+            vPt(vRightWrap - 0.001, -0.028, -0.001),
+            vPt(shaftR + 0.004, -0.028, 0.011),
           ],
           hingeHint: new THREE.Vector3(0, 1, 0),
         },
@@ -357,7 +385,6 @@ export function resolveMixamoHandRig(
     };
   } else {
     // Horizontal / angled cradle / attachment-cleared wrap
-    // (fingers curl around bottom onto +X flank; thumb climbs -X flank)
     const ubScale = d.underbarrelScale;
     const wrapHalfW = m.leftGripEnvelopeHalfW;
     const wrapRightHalfW = m.leftGripEnvelopeRightClearX;
@@ -386,7 +413,6 @@ export function resolveMixamoHandRig(
     const cosP = Math.cos(pitchRad);
     const cradlePt = (x: number, y: number, zOff: number): THREE.Vector3 => {
       const dy = y - wrapCenterY;
-      // Rotate pitch around X axis so -Z goes up (+Y) when pitched
       const ry = dy * cosP - zOff * sinP;
       const rz = zOff * cosP + dy * sinP;
       return new THREE.Vector3(x, wrapCenterY + ry, centerZ + rz);
@@ -397,36 +423,42 @@ export function resolveMixamoHandRig(
     const leftFlank = -(wrapHalfW + 0.0085);
     const sideSpan = Math.max(0.018, wrapCenterY - wrapBotY);
 
+    // Keep MCP knuckles underneath the handguard/attachment envelope close enough to rightFlank
+    // that MCP->PIP phalanx length stays <= 55 mm even on wide attachments, and align wrist
+    // just left-rear of Middle1 so wrist -> Middle1 (+Y hand axis) stays <= 20 deg from -Z.
+    const mcpX = Math.max(-(wrapHalfW * 0.3), rightFlank - 0.034);
+
     const makeCradleFinger = (
       zOff: number,
-      fingerScale: number
+      fingerScale: number,
+      mcpZOverride?: number
     ): [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] => {
-      const pipY = wrapBotY + sideSpan * 0.46;
+      const pipY = wrapBotY + Math.min(0.014, sideSpan * 0.42);
       const dipY = pipY + 0.024 * fingerScale;
       const tipY = dipY + 0.018 * fingerScale;
       return [
-        cradlePt(wrapRightHalfW * 0.34, wrapBotY - 0.010, zOff * 0.72),
+        cradlePt(mcpX, wrapBotY - 0.010, mcpZOverride ?? zOff * 0.72),
         cradlePt(rightFlank, pipY, zOff),
         cradlePt(rightFlank - 0.001, dipY, zOff),
         cradlePt(wrapRightHalfW + 0.005, tipY, zOff),
       ];
     };
 
-    // CNC Handstop: fit Index..Pinky cleanly inside the pocket between front barricade stop and rear hook
     const isHandstopPocket = m.leftGripPlacement === 'handstop_pocket';
     const pocketScale = isHandstopPocket ? clamp(ubScale, 0.78, 1.08) : 1.0;
     const zIndex = (isHandstopPocket ? -0.016 : -0.026) * pocketScale;
-    const zMiddle = (isHandstopPocket ? -0.005 : -0.008) * pocketScale;
-    const zRing = (isHandstopPocket ? 0.006 : 0.009) * pocketScale;
-    const zPinky = (isHandstopPocket ? 0.016 : 0.025) * pocketScale;
+    const zMiddle = (isHandstopPocket ? -0.008 : -0.016) * pocketScale;
+    const zRing = (isHandstopPocket ? 0.006 : 0.008) * pocketScale;
+    const zPinky = (isHandstopPocket ? 0.016 : 0.024) * pocketScale;
 
-    const wristZOff =
-      effectiveUb === 'bipod' && m.leftGripPlacement === 'front_of_attachment'
-        ? 0.036
-        : 0.050;
+    // Anchor wrist 56-57 mm behind Socket_Grip_Left (+Z) in weapon space
+    // and ~13 mm left of Middle1 MCP so wrist -> Middle1 stays well within <= 25 deg of -Z.
+    const wristZ = handLRel.z + (effectiveUb === 'angled_grip' ? 0.056 : 0.057);
+    const wristX = mcpX - 0.013;
+    const wristY = wrapBotY - 0.022;
 
     leftJoints = {
-      wrist: cradlePt(-(wrapHalfW + 0.023), wrapBotY - 0.036, wristZOff),
+      wrist: new THREE.Vector3(wristX, wristY, wristZ),
       wristDorsalHint: new THREE.Vector3(-0.78, -0.62, 0).normalize(),
       fingers: {
         Thumb: {
@@ -439,49 +471,63 @@ export function resolveMixamoHandRig(
           hingeHint: new THREE.Vector3(0, 1, 0),
         },
         Index: {
-          points: makeCradleFinger(zIndex, 0.96),
+          points: makeCradleFinger(zIndex, 0.96, zIndex * 0.85),
           hingeHint: hingeZ,
         },
         Middle: {
-          points: makeCradleFinger(zMiddle, 1.05),
+          points: makeCradleFinger(zMiddle, 1.05, zMiddle * 0.95),
           hingeHint: hingeZ,
         },
         Ring: {
-          points: makeCradleFinger(zRing, 0.96),
+          points: makeCradleFinger(zRing, 0.96, zRing * 0.55),
           hingeHint: hingeZ,
         },
         Pinky: {
-          points: makeCradleFinger(zPinky, 0.80),
+          points: makeCradleFinger(zPinky, 0.80, zPinky * 0.55),
           hingeHint: hingeZ,
         },
       },
     };
   }
 
-  const rightBones = buildHandBonesFromJoints('Right', 'HandRig_Right', rightJoints);
-  const leftBones = buildHandBonesFromJoints('Left', 'HandRig_Left', leftJoints);
+  const rightBuilt = buildHandBonesFromJoints(
+    'Right',
+    `${MIXAMO_BONE_PREFIX}RightForeArm`,
+    handRRel,
+    rightJoints
+  );
+  const leftBuilt = buildHandBonesFromJoints(
+    'Left',
+    `${MIXAMO_BONE_PREFIX}LeftForeArm`,
+    handLRel,
+    leftJoints
+  );
   const bones: Record<string, HandBoneNodeSpec> = {
-    ...rightBones,
-    ...leftBones,
+    ...rightBuilt.bones,
+    ...leftBuilt.bones,
   };
 
   return {
     naming_convention: 'mixamo',
-    mixamo_prefix: 'mixamorig:',
+    mixamo_prefix: MIXAMO_BONE_PREFIX,
+    finger_axis: '+Y',
     bone_longitudinal_axis: '+Y',
     wrist_bones: {
       right: 'RightHand',
       left: 'LeftHand',
     },
     wrist_mixamo_names: {
-      right: 'mixamorig:RightHand',
-      left: 'mixamorig:LeftHand',
+      right: `${MIXAMO_BONE_PREFIX}RightHand`,
+      left: `${MIXAMO_BONE_PREFIX}LeftHand`,
     },
-    total_bones: Object.keys(bones).length,
     right_grip_style: 'pistol_grip',
     left_grip_style: leftGripStyle,
     left_grip_placement: m.leftGripPlacement,
     underbarrel_variant: effectiveUb,
+    grips: {
+      right: rightBuilt.gripSolve,
+      left: leftBuilt.gripSolve,
+    },
     bones,
   };
 }

@@ -164,7 +164,7 @@ export function resolveMechanicalConstraints(config: WeaponConfig): ResolvedMech
     z: 0.004 + Math.sin(gripAngleRad) * palmDrop,
   };
   const socketHandRPos = {
-    x: gripHalfSurfaceX,
+    x: gripPivotPos.x,
     y: gripPivotPos.y,
     z: gripPivotPos.z,
   };
@@ -564,6 +564,7 @@ export function resolveMechanicalConstraints(config: WeaponConfig): ResolvedMech
     socketMuzzlePos,
     socketEjectPos,
     socketAdsPos,
+    rightGripSurfaceHalfW: gripHalfSurfaceX,
     socketHandRPos,
     socketHandRForward,
     socketHandRUp,

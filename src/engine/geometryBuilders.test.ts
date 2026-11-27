@@ -257,6 +257,7 @@ test('buildWeaponSceneGraph exposes standardized Godot 4.7.2 empty sockets and a
     'Socket_Muzzle',
     'Socket_Grip_Right',
     'Socket_Grip_Left',
+    'Socket_Shoulder',
     'Socket_ADS',
     'Socket_Eject',
     'Socket_Mag',
@@ -269,13 +270,19 @@ test('buildWeaponSceneGraph exposes standardized Godot 4.7.2 empty sockets and a
     assert.equal((node as THREE.Mesh).isMesh, undefined, `${requiredSocket} must not be a Mesh`);
   }
 
-  // Removing handguard omits Socket_Underbarrel
+  // Removing handguard omits Socket_Underbarrel; removing stock omits Socket_Shoulder
   const noHgCfg = cloneWeaponConfig(cfg);
   noHgCfg.parts.handguard = 'none';
+  noHgCfg.parts.stock = 'none';
   const noHgRig = buildWeaponSceneGraph(noHgCfg, resolveMechanicalConstraints(noHgCfg), mats);
   assert.equal(noHgRig.socketUnderbarrel, null);
+  assert.equal(noHgRig.socketShoulder, null);
   assert.equal(
     noHgRig.root.children.find((c) => c.name === 'Socket_Underbarrel'),
+    undefined
+  );
+  assert.equal(
+    noHgRig.root.children.find((c) => c.name === 'Socket_Shoulder'),
     undefined
   );
 
@@ -286,21 +293,19 @@ test('buildWeaponSceneGraph exposes standardized Godot 4.7.2 empty sockets and a
   );
 });
 
-test('Socket_Grip_Right and Socket_Grip_Left sit on exterior mesh side surfaces (never inside mesh) and match basis vectors', () => {
+test('Socket_Grip_Right sits at grip centerline pivot and Socket_Grip_Left sits on exterior -X surface', () => {
   const mats = createTestMaterials();
   const raycaster = new THREE.Raycaster();
 
   const assertSurfaceContact = (
     label: string,
     targetGroup: THREE.Group,
-    socketObj: THREE.Object3D,
-    expectedFwd: { x: number; y: number; z: number },
-    expectedUp: { x: number; y: number; z: number },
+    socketPos: THREE.Vector3,
     normal: { x: number; y: number; z: number }
   ) => {
     const nVec = new THREE.Vector3(normal.x, normal.y, normal.z).normalize();
     const rayDist = 0.08;
-    const rayOrigin = socketObj.position.clone().addScaledVector(nVec, rayDist);
+    const rayOrigin = socketPos.clone().addScaledVector(nVec, rayDist);
     raycaster.set(rayOrigin, nVec.clone().negate());
     const hits = raycaster.intersectObject(targetGroup, true);
     assert.ok(hits.length > 0, `${label}: ray along -contact_normal must hit target mesh`);
@@ -308,35 +313,22 @@ test('Socket_Grip_Right and Socket_Grip_Left sit on exterior mesh side surfaces 
     const outsideGapMeters = hits[0].distance - rayDist;
     assert.ok(
       outsideGapMeters >= -0.0005 && outsideGapMeters <= 0.007,
-      `${label}: socket must sit flush on/outside exterior surface (-0.5mm..+7mm outside), got ${(outsideGapMeters * 1000).toFixed(2)}mm`
-    );
-
-    // Verify Object3D quaternion local -Z === expectedFwd and +Y === expectedUp
-    const localFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(socketObj.quaternion);
-    const localUp = new THREE.Vector3(0, 1, 0).applyQuaternion(socketObj.quaternion);
-    assert.ok(
-      localFwd.distanceTo(new THREE.Vector3(expectedFwd.x, expectedFwd.y, expectedFwd.z)) < 1e-3,
-      `${label}: Object3D -Z mismatch`
-    );
-    assert.ok(
-      localUp.distanceTo(new THREE.Vector3(expectedUp.x, expectedUp.y, expectedUp.z)) < 1e-3,
-      `${label}: Object3D +Y mismatch`
+      `${label}: surface point must sit flush on/outside exterior surface (-0.5mm..+7mm outside), got ${(outsideGapMeters * 1000).toFixed(2)}mm`
     );
   };
 
-  // All 7 pistol grip variants
+  // All 7 pistol grip variants: Socket_Grip_Right at gripPivotPos (relative [0,0,0]) and palm surface at rightGripSurfaceHalfW
   for (const grip of SLOT_SPECS.grip.variants) {
     const cfg = cloneWeaponConfig(STARTER_PRESETS[0].config);
     cfg.parts.grip = grip.id as typeof cfg.parts.grip;
     const m = resolveMechanicalConstraints(cfg);
     const rig = buildWeaponSceneGraph(cfg, m, mats);
     rig.root.updateMatrixWorld(true);
+    assert.ok(rig.socketGripRight.position.distanceTo(new THREE.Vector3(m.gripPivotPos.x, m.gripPivotPos.y, m.gripPivotPos.z)) < 1e-6);
     assertSurfaceContact(
       `grip.${grip.id}`,
       rig.slotGroups.grip,
-      rig.socketGripRight,
-      m.socketHandRForward,
-      m.socketHandRUp,
+      new THREE.Vector3(m.rightGripSurfaceHalfW, m.gripPivotPos.y, m.gripPivotPos.z),
       m.socketHandRNormal
     );
   }
@@ -353,9 +345,7 @@ test('Socket_Grip_Right and Socket_Grip_Left sit on exterior mesh side surfaces 
     assertSurfaceContact(
       `handguard.${hg.id}`,
       targetGrp,
-      rig.socketGripLeft,
-      m.socketHandLForward,
-      m.socketHandLUp,
+      rig.socketGripLeft.position,
       m.socketHandLNormal
     );
   }
@@ -378,9 +368,7 @@ test('Socket_Grip_Right and Socket_Grip_Left sit on exterior mesh side surfaces 
     assertSurfaceContact(
       `underbarrel.${ub.id}`,
       targetGrp,
-      rig.socketGripLeft,
-      m.socketHandLForward,
-      m.socketHandLUp,
+      rig.socketGripLeft.position,
       m.socketHandLNormal
     );
   }
@@ -388,7 +376,6 @@ test('Socket_Grip_Right and Socket_Grip_Left sit on exterior mesh side surfaces 
 
 test('WeaponRoot embeds full Mixamo RightHand & LeftHand bone trees across all 9 underbarrel components without mesh clipping', () => {
   const mats = createTestMaterials();
-  // Double-sided material clone for odd-even inside-mesh raycast parity checks
   const doubleMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
   const raycaster = new THREE.Raycaster();
 
@@ -447,7 +434,6 @@ test('WeaponRoot embeds full Mixamo RightHand & LeftHand bone trees across all 9
     },
   ];
 
-  // Collect closed mesh clones for odd-even containment checks
   const buildDoubleSidedProbeGroup = (src: THREE.Group): THREE.Group => {
     const g = new THREE.Group();
     src.updateMatrixWorld(true);
@@ -463,7 +449,6 @@ test('WeaponRoot embeds full Mixamo RightHand & LeftHand bone trees across all 9
   };
 
   const countMeshParity = (point: THREE.Vector3, probeGroup: THREE.Group): number => {
-    // Check if point is strictly inside any watertight sub-mesh using +X raycast parity
     let maxHits = 0;
     for (const mesh of probeGroup.children) {
       raycaster.set(point, new THREE.Vector3(1, 0.13, 0.07).normalize());
@@ -481,13 +466,19 @@ test('WeaponRoot embeds full Mixamo RightHand & LeftHand bone trees across all 9
     const spec = resolveMixamoHandRig(cfg, m);
     rig.root.updateMatrixWorld(true);
 
-    // 1. All 42 Mixamo bones exist as THREE.Bone children under HandRig_Right / HandRig_Left with mixamo_name extras
+    // 1. All 42 Mixamo bones exist as THREE.Bone children for live inspector with mixamorig1_ extras
     assert.equal(rig.handBones.size, 42);
     for (const boneName of ALL_MIXAMO_HAND_BONE_NAMES) {
       const bone = rig.root.getObjectByName(boneName) as THREE.Bone | undefined;
       assert.ok(bone && bone.isBone, `${label}: missing THREE.Bone ${boneName}`);
-      assert.equal(bone.parent?.name, spec.bones[boneName].parent);
-      assert.equal(bone.userData.mixamo_name, `mixamorig:${boneName}`);
+      const expectedParent =
+        boneName === 'RightHand'
+          ? 'HandRig_Right'
+          : boneName === 'LeftHand'
+            ? 'HandRig_Left'
+            : spec.bones[boneName].parent.replace(/^mixamorig1_/, '');
+      assert.equal(bone.parent?.name, expectedParent);
+      assert.equal(bone.userData.mixamo_name, `mixamorig1_${boneName}`);
 
       const worldPos = new THREE.Vector3();
       bone.getWorldPosition(worldPos);

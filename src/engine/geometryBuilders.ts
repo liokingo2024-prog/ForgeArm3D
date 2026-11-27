@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ResolvedMechanics, SlotId, WeaponConfig } from '../types/weapon';
-import { MIXAMO_FINGERS, resolveMixamoHandRig } from '../utils/handRig';
+import { MIXAMO_BONE_PREFIX, MIXAMO_FINGERS, resolveMixamoHandRig } from '../utils/handRig';
 
 export interface WeaponMaterials {
   bySlot: Record<SlotId, THREE.MeshPhysicalMaterial>;
@@ -28,6 +28,7 @@ export interface BuiltWeaponRig {
   socketMuzzle: THREE.Object3D;
   socketGripRight: THREE.Object3D;
   socketGripLeft: THREE.Object3D;
+  socketShoulder: THREE.Object3D | null;
   socketAds: THREE.Object3D;
   socketEject: THREE.Object3D;
   socketMag: THREE.Object3D;
@@ -4611,20 +4612,6 @@ export function buildWeaponSceneGraph(
   root.add(boltGroup, magazineGroup, triggerGroup, stockGroup, selectorGroup);
 
   // Standardized Godot 4.7.2 empty Object3D sockets directly under WeaponRoot
-  const applySocketBasis = (
-    socket: THREE.Object3D,
-    forward: { x: number; y: number; z: number },
-    upHint: { x: number; y: number; z: number }
-  ) => {
-    const fwd = new THREE.Vector3(forward.x, forward.y, forward.z).normalize();
-    const upVec = new THREE.Vector3(upHint.x, upHint.y, upHint.z).normalize();
-    const right = new THREE.Vector3().crossVectors(fwd, upVec).normalize();
-    const orthoUp = new THREE.Vector3().crossVectors(right, fwd).normalize();
-    const back = fwd.clone().negate();
-    const basisMat = new THREE.Matrix4().makeBasis(right, orthoUp, back);
-    socket.quaternion.setFromRotationMatrix(basisMat);
-  };
-
   const socketMuzzle = new THREE.Object3D();
   socketMuzzle.name = 'Socket_Muzzle';
   socketMuzzle.position.set(m.socketMuzzlePos.x, m.socketMuzzlePos.y, m.socketMuzzlePos.z);
@@ -4632,12 +4619,10 @@ export function buildWeaponSceneGraph(
   const socketGripRight = new THREE.Object3D();
   socketGripRight.name = 'Socket_Grip_Right';
   socketGripRight.position.set(m.socketHandRPos.x, m.socketHandRPos.y, m.socketHandRPos.z);
-  applySocketBasis(socketGripRight, m.socketHandRForward, m.socketHandRUp);
 
   const socketGripLeft = new THREE.Object3D();
   socketGripLeft.name = 'Socket_Grip_Left';
   socketGripLeft.position.set(m.socketHandLPos.x, m.socketHandLPos.y, m.socketHandLPos.z);
-  applySocketBasis(socketGripLeft, m.socketHandLForward, m.socketHandLUp);
 
   const socketAds = new THREE.Object3D();
   socketAds.name = 'Socket_ADS';
@@ -4665,6 +4650,18 @@ export function buildWeaponSceneGraph(
     socketOptic
   );
 
+  let socketShoulder: THREE.Object3D | null = null;
+  if (config.parts.stock !== 'none') {
+    socketShoulder = new THREE.Object3D();
+    socketShoulder.name = 'Socket_Shoulder';
+    socketShoulder.position.set(
+      m.gripPivotPos.x,
+      m.gripPivotPos.y - config.dimensions.stockDrop,
+      m.socketMuzzlePos.z + m.exactLengthMeters
+    );
+    root.add(socketShoulder);
+  }
+
   let socketUnderbarrel: THREE.Object3D | null = null;
   if (config.parts.handguard !== 'none') {
     socketUnderbarrel = new THREE.Object3D();
@@ -4677,7 +4674,7 @@ export function buildWeaponSceneGraph(
     root.add(socketUnderbarrel);
   }
 
-  // Mixamo-standard gripping hand bone hierarchies (Wrist -> Thumb/Index/Middle/Ring/Pinky 1..4)
+  // Mixamo-standard gripping hand bone hierarchies for live viewport rig inspection
   const handRigSpec = resolveMixamoHandRig(config, m);
   const handBones = new Map<string, THREE.Bone>();
 
@@ -4687,7 +4684,7 @@ export function buildWeaponSceneGraph(
     grp.position.set(m.gripPivotPos.x, m.gripPivotPos.y, m.gripPivotPos.z);
     grp.userData = {
       naming_convention: 'mixamo',
-      mixamo_prefix: 'mixamorig:',
+      mixamo_prefix: MIXAMO_BONE_PREFIX,
       side: side.toLowerCase(),
       grip_style: side === 'Right' ? handRigSpec.right_grip_style : handRigSpec.left_grip_style,
       ...(side === 'Left'
@@ -4789,6 +4786,7 @@ export function buildWeaponSceneGraph(
     socketMuzzle,
     socketGripRight,
     socketGripLeft,
+    socketShoulder,
     socketAds,
     socketEject,
     socketMag,

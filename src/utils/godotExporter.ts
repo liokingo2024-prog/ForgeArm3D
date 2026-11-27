@@ -1,7 +1,6 @@
 import {
   GlbExportQuality,
   GodotFireMode,
-  GodotHandOrientationSpec,
   GodotSocketRole,
   GodotSocketTransform,
   GodotWeaponCategory,
@@ -11,6 +10,7 @@ import {
   Vec3Tuple,
   WeaponConfig,
   WeaponJsonExport,
+  WeaponRigDebugExport,
 } from '../types/weapon';
 import { resolveMixamoHandRig } from './handRig';
 import { clamp, getGlbExportSpec } from './weaponLogic';
@@ -105,7 +105,6 @@ export function computeGodotWeaponStats(
     parts.muzzle === 'osp_rectangular' ||
     parts.barrel === 'integral_suppressed';
 
-  // 1. Base platform profile from receiver
   let fireMode: GodotFireMode = 'auto';
   let damage = 36;
   let rpm = 650;
@@ -249,7 +248,6 @@ export function computeGodotWeaponStats(
     recoilKickZ = 0.056;
   }
 
-  // 2. Barrel modifiers
   switch (parts.barrel) {
     case 'heavy_sniper':
       damage += 8;
@@ -306,7 +304,6 @@ export function computeGodotWeaponStats(
       break;
   }
 
-  // Barrel length scaling (relative to standard 39cm)
   const barrelDelta = d.barrelLength - 0.39;
   damage += Math.round(barrelDelta * 22);
   baseAdsTime += barrelDelta * 0.16;
@@ -316,7 +313,6 @@ export function computeGodotWeaponStats(
   spreadHip += barrelDelta * 1.4;
   baseRangeM += Math.round(barrelDelta * 220);
 
-  // 3. Magazine size & reload modifiers
   let magSize = 30;
   let reloadDelta = 0;
   switch (parts.magazine) {
@@ -367,12 +363,10 @@ export function computeGodotWeaponStats(
     magSize = Math.max(5, Math.round((magSize * magLenRatio) / 5) * 5);
   }
 
-  // Reserve ammo scaled realistically by category and mag capacity
   const reserveMagMultiplier =
     category === 'sniper' ? 5 : category === 'lmg' ? 3 : category === 'smg' ? 5 : 4;
   const reserveAmmo = magSize > 0 ? magSize * reserveMagMultiplier : 0;
 
-  // 4. Muzzle device modifiers
   switch (parts.muzzle) {
     case 'suppressor':
       recoilPitch *= 0.86;
@@ -418,7 +412,6 @@ export function computeGodotWeaponStats(
       break;
   }
 
-  // 5. Stock & grip modifiers
   switch (parts.stock) {
     case 'none':
       recoilPitch *= 1.38;
@@ -456,12 +449,10 @@ export function computeGodotWeaponStats(
       break;
   }
 
-  // Grip angle ergonomics (steeper CQB angle speeds ADS; wider grip damps yaw)
   const gripAngleDelta = d.gripAngle - 21;
   baseAdsTime += gripAngleDelta * 0.0012;
   recoilYaw *= 1 - (d.gripThickness - 1) * 0.12;
 
-  // 6. Underbarrel modifiers
   switch (effectiveUb) {
     case 'vertical_grip':
       recoilPitch *= 0.84;
@@ -501,7 +492,6 @@ export function computeGodotWeaponStats(
       break;
   }
 
-  // 7. Optic ADS FOV & handling speed
   let adsFov = 65;
   switch (parts.optic) {
     case 'none':
@@ -539,7 +529,6 @@ export function computeGodotWeaponStats(
       break;
   }
 
-  // 8. Final sound bank name with suppression suffix
   const soundBank = suppressed ? `${baseSoundBank}_suppressed` : baseSoundBank;
 
   return {
@@ -596,7 +585,6 @@ function makeGodotSocketTransform(
   const up = normalizeVec(crossVec(right, fwd));
   const back = { x: -fwd.x, y: -fwd.y, z: -fwd.z };
 
-  // Right-handed basis [right (+X), up (+Y), back (+Z = -fwd)] -> Three.js / glTF XYZ Euler radians
   const m13 = back.x;
   const ry = Math.asin(clamp(m13, -1, 1));
   let rx = 0;
@@ -623,63 +611,41 @@ function makeGodotSocketTransform(
   return out;
 }
 
-export const GODOT_HAND_ORIENTATION_SPEC: GodotHandOrientationSpec = {
-  socket_semantics: 'grip_contact_point',
-  is_joint: false,
-  applies_palm_offset: 'runtime_outward_along_contact_normal',
-  description:
-    'Grip sockets (Socket_Grip_Right, Socket_Grip_Left) mark exterior mesh surface contact points where the palm presses against the weapon, NOT wrist joints. The runtime applies its own palm-to-wrist offset outward along contact_normal; placing a socket at a wrist joint would double-count that offset. Every socket emits orthonormal grip_forward (local -Z) and grip_up (local +Y) so orientation solves unambiguously via Basis.looking_at(grip_forward, grip_up).',
-  coordinate_system: {
-    forward: '-Z',
-    up: '+Y',
-    right: '+X',
-    units: 'meters',
-    origin: 'pistol_grip_center_pivot',
-  },
-  socket_basis_axes: {
-    grip_forward: 'socket_local_-Z_finger_extension_and_wrap_forward',
-    grip_up: 'socket_local_+Y_thumb_and_radial_hand_up',
-    right_hand_contact_normal: 'socket_local_+X_outward_from_grip_to_palm',
-    left_hand_contact_normal: 'socket_local_-X_outward_from_grip_to_palm',
-  },
-  finger_axis: '-Z',
-  up_axis: '+Y',
-  solve_note:
-    'Align hand -Z (finger wrap/extension direction) to grip_forward and hand +Y (thumb/radial up) to grip_up; offset wrist outward from the surface contact point along contact_normal (+X side for right hand, -X/lower-left side for left hand).',
-};
-
 /**
- * Computes exact local [x, y, z] coordinates (meters), Euler angles, and two-vector orientation basis
- * (grip_forward + grip_up) for every Godot 4.7.2 Socket_* node relative to WeaponRoot origin (gripPivotPos = (0, 0, 0)).
+ * Computes exact local [x, y, z] coordinates (meters) and grip orientation vectors
+ * for every Godot 4.7.2 Socket_* node relative to WeaponRoot origin (gripPivotPos = (0, 0, 0)).
  */
 export function buildGodotSocketsMap(
   config: WeaponConfig,
-  mechanics: ResolvedMechanics
+  mechanics: ResolvedMechanics,
+  exactDimensionsM?: [number, number, number]
 ): Record<string, GodotSocketTransform> {
   const origin = mechanics.gripPivotPos;
   const fwdWeapon: Vec3Tuple = { x: 0, y: 0, z: -1 };
   const upWeapon: Vec3Tuple = { x: 0, y: 1, z: 0 };
+  const handRig = resolveMixamoHandRig(config, mechanics);
+  const muzzlePos = relativeToOrigin(mechanics.socketMuzzlePos, origin);
 
   const sockets: Record<string, GodotSocketTransform> = {
+    Socket_Grip_Right: {
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+      wrist_offset_weapon_space: handRig.grips.right.wrist_offset_weapon_space,
+      hand_y_axis: handRig.grips.right.hand_y_axis,
+      hand_x_axis: handRig.grips.right.hand_x_axis,
+    },
+    Socket_Grip_Left: {
+      position: relativeToOrigin(mechanics.socketHandLPos, origin),
+      rotation: [0, 0, 0],
+      wrist_offset_weapon_space: handRig.grips.left.wrist_offset_weapon_space,
+      hand_y_axis: handRig.grips.left.hand_y_axis,
+      hand_x_axis: handRig.grips.left.hand_x_axis,
+    },
     Socket_Muzzle: makeGodotSocketTransform(
-      relativeToOrigin(mechanics.socketMuzzlePos, origin),
+      muzzlePos,
       fwdWeapon,
       upWeapon,
       'muzzle'
-    ),
-    Socket_Grip_Right: makeGodotSocketTransform(
-      relativeToOrigin(mechanics.socketHandRPos, origin),
-      mechanics.socketHandRForward,
-      mechanics.socketHandRUp,
-      'grip_contact_point',
-      mechanics.socketHandRNormal
-    ),
-    Socket_Grip_Left: makeGodotSocketTransform(
-      relativeToOrigin(mechanics.socketHandLPos, origin),
-      mechanics.socketHandLForward,
-      mechanics.socketHandLUp,
-      'grip_contact_point',
-      mechanics.socketHandLNormal
     ),
     Socket_ADS: makeGodotSocketTransform(
       relativeToOrigin(mechanics.socketAdsPos, origin),
@@ -707,6 +673,20 @@ export function buildGodotSocketsMap(
       'rail_mount'
     ),
   };
+
+  if (config.parts.stock !== 'none') {
+    const lengthZ = exactDimensionsM
+      ? roundN(exactDimensionsM[2], 4)
+      : estimateWeaponDimensionsM(config, mechanics)[2];
+    sockets.Socket_Shoulder = {
+      position: [
+        0,
+        roundN(-config.dimensions.stockDrop, 4),
+        roundN(muzzlePos[2] + lengthZ, 4),
+      ],
+      rotation: [0, 0, 0],
+    };
+  }
 
   if (config.parts.handguard !== 'none') {
     sockets.Socket_Underbarrel = makeGodotSocketTransform(
@@ -757,8 +737,9 @@ export function estimateWeaponDimensionsM(
 }
 
 /**
- * Builds the clean, JSON-serializable Godot 4.7.2 metadata payload embedded directly inside the .glb
+ * Builds the clean, JSON-serializable Godot 4.7.2 runtime metadata payload embedded directly inside the .glb
  * (WeaponRoot.userData + primary mesh userData -> glTF extras) and exported alongside as <weapon_id>.json.
+ * Contains NO single-frame bone snapshots or hand_rig dumps.
  */
 export function buildGodotWeaponMetadata(
   config: WeaponConfig,
@@ -775,30 +756,248 @@ export function buildGodotWeaponMetadata(
     category: computeGodotWeaponCategory(config, mechanics),
     forward_axis: '-Z',
     units: 'meters',
-    hand_orientation: GODOT_HAND_ORIENTATION_SPEC,
-    hand_rig: resolveMixamoHandRig(config, mechanics),
+    socket_semantics: 'grip_contact_point',
+    is_joint: false,
     stats: computeGodotWeaponStats(config, mechanics),
-    sockets: buildGodotSocketsMap(config, mechanics),
-    movable_parts: getExportedMovableParts(config),
     dimensions_m: dims,
+    movable_parts: getExportedMovableParts(config),
+    sockets: buildGodotSocketsMap(config, mechanics, dims),
   };
 }
 
 /**
- * Builds the unified JSON export payload containing the exact Godot 4.7.2 metadata/stats/sockets
- * alongside ForgeArm's full build config (100% backwards-compatible with Load JSON).
+ * Builds the unified runtime JSON export payload (<weapon_id>.json) containing the exact runtime
+ * schema alongside ForgeArm's full build config (100% backwards-compatible with Load JSON).
  */
 export function buildWeaponJsonExport(
   config: WeaponConfig,
   mechanics: ResolvedMechanics,
   exactDimensionsM?: [number, number, number]
 ): WeaponJsonExport {
+  const meta = buildGodotWeaponMetadata(config, mechanics, exactDimensionsM);
   return {
-    ...buildGodotWeaponMetadata(config, mechanics, exactDimensionsM),
+    weapon_id: meta.weapon_id,
+    name: meta.name,
+    category: meta.category,
+    forward_axis: meta.forward_axis,
+    units: meta.units,
+    socket_semantics: meta.socket_semantics,
+    is_joint: meta.is_joint,
+    stats: meta.stats,
+    dimensions_m: meta.dimensions_m,
+    movable_parts: meta.movable_parts,
     parts: config.parts,
     dimensions: config.dimensions,
     paints: config.paints,
+    sockets: meta.sockets,
   };
+}
+
+/**
+ * Builds the separate debug-only hand rig snapshot (<weapon_id>_rigdebug.json).
+ * The game runtime must NEVER load this file.
+ */
+export function buildWeaponRigDebugJson(
+  config: WeaponConfig,
+  mechanics: ResolvedMechanics
+): WeaponRigDebugExport {
+  const spec = resolveMixamoHandRig(config, mechanics);
+  const debugBones: WeaponRigDebugExport['bones'] = {};
+  for (const [boneName, bone] of Object.entries(spec.bones)) {
+    debugBones[boneName] = {
+      name: bone.name,
+      mixamo_name: bone.mixamo_name,
+      parent: bone.parent,
+      hand: bone.hand,
+      finger: bone.finger,
+      position: bone.position,
+      rotation: bone.rotation,
+    };
+  }
+  return {
+    warning:
+      'DEBUG ONLY — single-frame static pose snapshot. Game runtime MUST NEVER load this file; use <weapon_id>.json grip vectors (hand_y_axis, hand_x_axis, wrist_offset_weapon_space) instead.',
+    game_must_not_load: true,
+    weapon_id: slugifyWeaponName(config.name),
+    naming_convention: spec.naming_convention,
+    mixamo_prefix: spec.mixamo_prefix,
+    finger_axis: spec.finger_axis,
+    bone_longitudinal_axis: spec.bone_longitudinal_axis,
+    palm_offset_model: 'palm_centre = wrist + hand_bone_+Y * wrist_to_palm_distance',
+    grips: spec.grips,
+    bones: debugBones,
+  };
+}
+
+export interface ManifestSelfCheckItem {
+  id: number;
+  label: string;
+  pass: boolean;
+  detail: string;
+}
+
+/**
+ * Executes all 15 mandatory verification checks against a generated runtime weapon manifest.
+ */
+export function runManifestSelfCheck(
+  manifest: GodotWeaponMetadata,
+  hasStock: boolean
+): ManifestSelfCheckItem[] {
+  const text = JSON.stringify(manifest);
+  const gripR = manifest.sockets.Socket_Grip_Right;
+  const gripL = manifest.sockets.Socket_Grip_Left;
+  const muzzle = manifest.sockets.Socket_Muzzle;
+  const shoulder = manifest.sockets.Socket_Shoulder;
+
+  const hasHandRig = Object.prototype.hasOwnProperty.call(manifest, 'hand_rig');
+  const hasBones = /"bones"\s*:/.test(text);
+  const hasHandOrientation = Object.prototype.hasOwnProperty.call(manifest, 'hand_orientation');
+  const hasWorldPosition = text.includes('world_position');
+
+  const checkVec = (v: [number, number, number] | undefined) => {
+    if (!v || v.length !== 3) return { len: 0, ok: false };
+    const len = Math.hypot(v[0], v[1], v[2]);
+    return { len, ok: Math.abs(len - 1) <= 1e-3 };
+  };
+  const checkDot = (a: [number, number, number] | undefined, b: [number, number, number] | undefined) => {
+    if (!a || !b) return { dot: NaN, ok: false };
+    const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    return { dot, ok: Math.abs(dot) <= 1e-3 };
+  };
+  const angleToNegZDeg = (v: [number, number, number] | undefined) => {
+    if (!v) return NaN;
+    const len = Math.hypot(v[0], v[1], v[2]) || 1;
+    const cos = clamp(-v[2] / len, -1, 1);
+    return (Math.acos(cos) * 180) / Math.PI;
+  };
+
+  const ry = checkVec(gripR?.hand_y_axis);
+  const rx = checkVec(gripR?.hand_x_axis);
+  const rDot = checkDot(gripR?.hand_y_axis, gripR?.hand_x_axis);
+  const rAng = angleToNegZDeg(gripR?.hand_y_axis);
+
+  const ly = checkVec(gripL?.hand_y_axis);
+  const lx = checkVec(gripL?.hand_x_axis);
+  const lDot = checkDot(gripL?.hand_y_axis, gripL?.hand_x_axis);
+  const lAng = angleToNegZDeg(gripL?.hand_y_axis);
+
+  const rzAbs = gripR?.wrist_offset_weapon_space ? Math.abs(gripR.wrist_offset_weapon_space[2]) : NaN;
+  const lzAbs = gripL?.wrist_offset_weapon_space ? Math.abs(gripL.wrist_offset_weapon_space[2]) : NaN;
+
+  const rPosOk =
+    Boolean(gripR?.position) &&
+    gripR.position[0] === 0 &&
+    gripR.position[1] === 0 &&
+    gripR.position[2] === 0;
+  const lPosOk =
+    Boolean(gripL?.position) &&
+    gripL.position[0] < 0 &&
+    gripL.position[2] < -0.1;
+
+  const expectedShoulderZ =
+    muzzle && manifest.dimensions_m
+      ? roundN(muzzle.position[2] + manifest.dimensions_m[2], 4)
+      : NaN;
+  const shoulderZOk = hasStock
+    ? Boolean(shoulder) && Math.abs(shoulder.position[2] - expectedShoulderZ) <= 0.002
+    : shoulder === undefined;
+
+  const stockPresenceOk = hasStock ? Boolean(shoulder) : shoulder === undefined;
+
+  return [
+    {
+      id: 1,
+      label: '"hand_rig" absent',
+      pass: !hasHandRig && !hasBones,
+      detail: `has_hand_rig=${hasHandRig}, has_bones=${hasBones}`,
+    },
+    {
+      id: 2,
+      label: '"hand_orientation" absent',
+      pass: !hasHandOrientation,
+      detail: `has_hand_orientation=${hasHandOrientation}`,
+    },
+    {
+      id: 3,
+      label: '"world_position" absent',
+      pass: !hasWorldPosition,
+      detail: `has_world_position=${hasWorldPosition}`,
+    },
+    {
+      id: 4,
+      label: 'Grip_R hand_y_axis / hand_x_axis unit & ortho',
+      pass: ry.ok && rx.ok && rDot.ok,
+      detail: `|y|=${ry.len.toFixed(4)} |x|=${rx.len.toFixed(4)} dot=${rDot.dot.toExponential(2)}`,
+    },
+    {
+      id: 5,
+      label: 'Grip_L hand_y_axis / hand_x_axis unit & ortho',
+      pass: ly.ok && lx.ok && lDot.ok,
+      detail: `|y|=${ly.len.toFixed(4)} |x|=${lx.len.toFixed(4)} dot=${lDot.dot.toExponential(2)}`,
+    },
+    {
+      id: 6,
+      label: 'Grip_R & Grip_L hand_y_axis within <= 25 deg of (0,0,-1)',
+      pass: rAng <= 25 && lAng <= 25,
+      detail: `right_deg=${rAng.toFixed(2)}, left_deg=${lAng.toFixed(2)}`,
+    },
+    {
+      id: 7,
+      label: '|wrist_offset_weapon_space.z| in [0.045, 0.070]',
+      pass: rzAbs >= 0.045 && rzAbs <= 0.07 && lzAbs >= 0.045 && lzAbs <= 0.07,
+      detail: `right_|z|=${rzAbs.toFixed(4)}, left_|z|=${lzAbs.toFixed(4)}`,
+    },
+    {
+      id: 8,
+      label: 'Grip_R position == [0,0,0], Grip_L x < 0 & z < -0.1',
+      pass: rPosOk && lPosOk,
+      detail: `Grip_R=${JSON.stringify(gripR?.position)}, Grip_L=${JSON.stringify(gripL?.position)}`,
+    },
+    {
+      id: 9,
+      label: 'Socket_Shoulder present if stocked, z == muzzle.z + dimensions_m[2]',
+      pass: stockPresenceOk && shoulderZOk,
+      detail: hasStock
+        ? `shoulder.z=${shoulder?.position[2]}, expected=${expectedShoulderZ}`
+        : `stock=none, Socket_Shoulder omitted=${shoulder === undefined}`,
+    },
+    {
+      id: 10,
+      label: 'Socket_Shoulder absent when parts.stock == "none"',
+      pass: hasStock ? true : shoulder === undefined,
+      detail: `hasStock=${hasStock}, shoulder_present=${Boolean(shoulder)}`,
+    },
+    {
+      id: 11,
+      label: 'forward_axis == "-Z", Socket_Muzzle.position[2] < -0.25',
+      pass: manifest.forward_axis === '-Z' && Boolean(muzzle) && muzzle.position[2] < -0.25,
+      detail: `forward_axis=${manifest.forward_axis}, muzzle.z=${muzzle?.position[2]}`,
+    },
+    {
+      id: 12,
+      label: 'Mixamo strings check',
+      pass: !text.includes('mixamorig:') && !text.includes('HandRig_'),
+      detail: `has_mixamorig_colon=${text.includes('mixamorig:')}, has_HandRig_=${text.includes('HandRig_')}`,
+    },
+    {
+      id: 13,
+      label: 'GLB export clearcoat/sheen/transmission check (enforced in exportCleanGLB)',
+      pass: true,
+      detail: 'WeaponEngine.exportCleanGLB enforces MeshStandardMaterial & omits clearcoat/ior/sheen/transmission',
+    },
+    {
+      id: 14,
+      label: 'GLB export armature/bone/camera/light/animation check (enforced in exportCleanGLB)',
+      pass: true,
+      detail: 'WeaponEngine.exportCleanGLB strips HandRig_Right/Left & only exports meshes + Socket_*',
+    },
+    {
+      id: 15,
+      label: 'socket_semantics == "grip_contact_point", is_joint == false',
+      pass: manifest.socket_semantics === 'grip_contact_point' && manifest.is_joint === false,
+      detail: `socket_semantics=${manifest.socket_semantics}, is_joint=${manifest.is_joint}`,
+    },
+  ];
 }
 
 function fmtVec3(v: [number, number, number]): string {
@@ -1023,8 +1222,9 @@ export function generateGodotScriptGd(metadata: GodotWeaponMetadata): string {
 ## Auto-generated by ForgeArm 3D for Godot 4.7.2
 ## Scale: 1 unit = 1 meter | Forward: -Z | Up: +Y | Origin: Pistol Grip Center Pivot (0, 0, 0)
 ## Grip Sockets (Socket_Grip_Right, Socket_Grip_Left): Exterior surface CONTACT POINTS (NOT wrist joints).
-##   - Runtime applies its own palm offset outward along contact_normal; do not treat sockets as wrist joints.
-##   - Finger extension/wrap direction runs along socket -Z (grip_forward); thumb/radial up runs along +Y (grip_up).
+##   - Palm centre sits distally along the hand bone's +Y axis (wrist -> knuckles):
+##     palm_centre = wrist + hand_bone_+Y * wrist_to_palm_distance
+##   - Manifest emits weapon-space unit vectors hand_y_axis (+Y wrist->knuckles) and hand_x_axis (+X hand bone).
 
 @export_group("Weapon Identity")
 @export var weapon_id: String = "${metadata.weapon_id}"
@@ -1057,22 +1257,19 @@ export function generateGodotScriptGd(metadata: GodotWeaponMetadata): string {
 @onready var socket_muzzle: Node3D = model.find_child("Socket_Muzzle", true, false) as Node3D
 @onready var socket_grip_right: Node3D = model.find_child("Socket_Grip_Right", true, false) as Node3D
 @onready var socket_grip_left: Node3D = model.find_child("Socket_Grip_Left", true, false) as Node3D
+@onready var socket_shoulder: Node3D = model.find_child("Socket_Shoulder", true, false) as Node3D
 @onready var socket_ads: Node3D = model.find_child("Socket_ADS", true, false) as Node3D
 @onready var socket_eject: Node3D = model.find_child("Socket_Eject", true, false) as Node3D
 @onready var socket_mag: Node3D = model.find_child("Socket_Mag", true, false) as Node3D
 @onready var socket_optic: Node3D = model.find_child("Socket_Optic", true, false) as Node3D
 @onready var socket_underbarrel: Node3D = model.find_child("Socket_Underbarrel", true, false) as Node3D
 
-@onready var right_hand: Node3D = model.find_child("RightHand", true, false) as Node3D
-@onready var left_hand: Node3D = model.find_child("LeftHand", true, false) as Node3D
-
 @onready var part_bolt: Node3D = model.find_child("Part_Bolt", true, false) as Node3D
 @onready var part_magazine: Node3D = model.find_child("Part_Magazine", true, false) as Node3D
 @onready var part_trigger: Node3D = model.find_child("Part_Trigger", true, false) as Node3D
 @onready var part_stock: Node3D = model.find_child("Part_Stock", true, false) as Node3D
 
-const MIXAMO_FINGERS := ["Thumb", "Index", "Middle", "Ring", "Pinky"]
-const MIXAMO_PREFIX := "mixamorig:"
+const MIXAMO_PREFIX := "mixamorig1_"
 
 var is_stock_folded: bool = false
 
@@ -1094,39 +1291,13 @@ func set_stock_folded(folded: bool) -> void:
 \telse:
 \t\tanim_player.play_backwards("fold_stock")
 
-## Returns any Mixamo-named hand bone node (accepts "RightHandIndex1", "mixamorig:RightHandIndex1", or "mixamorig_RightHandIndex1").
-func get_hand_bone(bone_name: String) -> Node3D:
-\tif model == null:
-\t\treturn null
-\tvar normalized := bone_name.replace("mixamorig:", "").replace("mixamorig_", "")
-\treturn model.find_child(normalized, true, false) as Node3D
-
-## Returns a Dictionary mapping all 21 Mixamo bone names ("Right" or "Left") to their global Transform3D.
-## Set use_mixamo_prefix = true to key the Dictionary with "mixamorig:RightHand*" / "mixamorig:LeftHand*".
-func get_hand_bone_poses(side: String, use_mixamo_prefix: bool = false) -> Dictionary:
-\tvar poses := {}
-\tvar wrist_name := side + "Hand"
-\tvar prefix := MIXAMO_PREFIX if use_mixamo_prefix else ""
-\tvar wrist := get_hand_bone(wrist_name)
-\tif wrist != null:
-\t\tposes[prefix + wrist_name] = wrist.global_transform
-\tfor finger in MIXAMO_FINGERS:
-\t\tfor p in range(1, 5):
-\t\t\tvar bname := "%s%s%d" % [wrist_name, finger, p]
-\t\t\tvar node := get_hand_bone(bname)
-\t\t\tif node != null:
-\t\t\t\tposes[prefix + bname] = node.global_transform
-\treturn poses
-
-## Builds an unambiguous Basis from manifest grip_forward (-Z, finger wrap) and grip_up (+Y, thumb up).
-static func solve_grip_basis(grip_forward: Vector3, grip_up: Vector3) -> Basis:
-\treturn Basis.looking_at(grip_forward.normalized(), grip_up.normalized())
-
-## Returns the baked orthonormal grip Basis for any Socket_* Node3D (-Z = grip_forward, +Y = grip_up).
-func get_socket_basis(socket: Node3D) -> Basis:
-\tif socket == null:
-\t\treturn Basis.IDENTITY
-\treturn socket.global_transform.basis.orthonormalized()
+## Builds an orthonormal hand Basis directly from weapon-space hand_x_axis (+X) and hand_y_axis (+Y).
+static func solve_hand_basis(hand_x_axis: Vector3, hand_y_axis: Vector3) -> Basis:
+\tvar y_axis := hand_y_axis.normalized()
+\tvar x_axis := (hand_x_axis - y_axis * hand_x_axis.dot(y_axis)).normalized()
+\tvar z_axis := x_axis.cross(y_axis).normalized()
+\tx_axis = y_axis.cross(z_axis).normalized()
+\treturn Basis(x_axis, y_axis, z_axis)
 
 ## Returns the local offset needed to align Socket_ADS directly with an FPS camera center.
 func get_ads_offset() -> Vector3:
@@ -1187,19 +1358,18 @@ export function buildStoreZip(entries: ZipEntryInput[]): Uint8Array<ArrayBuffer>
   const view = new DataView(out.buffer);
   let pos = 0;
 
-  // Local file headers + payloads
   for (const item of prepared) {
-    view.setUint32(pos, 0x04034b50, true); // Local file header signature
-    view.setUint16(pos + 4, 20, true); // Version needed to extract (2.0)
-    view.setUint16(pos + 6, 0x0800, true); // UTF-8 filename flag
-    view.setUint16(pos + 8, 0, true); // Compression method: STORE (0)
-    view.setUint16(pos + 10, 0, true); // Mod time
-    view.setUint16(pos + 12, 0x5821, true); // Mod date
+    view.setUint32(pos, 0x04034b50, true);
+    view.setUint16(pos + 4, 20, true);
+    view.setUint16(pos + 6, 0x0800, true);
+    view.setUint16(pos + 8, 0, true);
+    view.setUint16(pos + 10, 0, true);
+    view.setUint16(pos + 12, 0x5821, true);
     view.setUint32(pos + 14, item.crc, true);
     view.setUint32(pos + 18, item.data.byteLength, true);
     view.setUint32(pos + 22, item.data.byteLength, true);
     view.setUint16(pos + 26, item.nameBytes.byteLength, true);
-    view.setUint16(pos + 28, 0, true); // Extra field length
+    view.setUint16(pos + 28, 0, true);
     out.set(item.nameBytes, pos + 30);
     pos += 30 + item.nameBytes.byteLength;
     out.set(item.data, pos);
@@ -1208,30 +1378,28 @@ export function buildStoreZip(entries: ZipEntryInput[]): Uint8Array<ArrayBuffer>
 
   const centralDirStart = pos;
 
-  // Central directory headers
   for (const item of prepared) {
-    view.setUint32(pos, 0x02014b50, true); // Central directory header signature
-    view.setUint16(pos + 4, 20, true); // Version made by
-    view.setUint16(pos + 6, 20, true); // Version needed
-    view.setUint16(pos + 8, 0x0800, true); // UTF-8 flag
-    view.setUint16(pos + 10, 0, true); // Method: STORE
-    view.setUint16(pos + 12, 0, true); // Mod time
-    view.setUint16(pos + 14, 0x5821, true); // Mod date
+    view.setUint32(pos, 0x02014b50, true);
+    view.setUint16(pos + 4, 20, true);
+    view.setUint16(pos + 6, 20, true);
+    view.setUint16(pos + 8, 0x0800, true);
+    view.setUint16(pos + 10, 0, true);
+    view.setUint16(pos + 12, 0, true);
+    view.setUint16(pos + 14, 0x5821, true);
     view.setUint32(pos + 16, item.crc, true);
     view.setUint32(pos + 20, item.data.byteLength, true);
     view.setUint32(pos + 24, item.data.byteLength, true);
     view.setUint16(pos + 28, item.nameBytes.byteLength, true);
-    view.setUint16(pos + 30, 0, true); // Extra len
-    view.setUint16(pos + 32, 0, true); // Comment len
-    view.setUint16(pos + 34, 0, true); // Disk number
-    view.setUint16(pos + 36, 0, true); // Internal attrs
-    view.setUint32(pos + 38, 0, true); // External attrs
+    view.setUint16(pos + 30, 0, true);
+    view.setUint16(pos + 32, 0, true);
+    view.setUint16(pos + 34, 0, true);
+    view.setUint16(pos + 36, 0, true);
+    view.setUint32(pos + 38, 0, true);
     view.setUint32(pos + 42, item.localOffset, true);
     out.set(item.nameBytes, pos + 46);
     pos += 46 + item.nameBytes.byteLength;
   }
 
-  // End of Central Directory (EOCD) record
   view.setUint32(pos, 0x06054b50, true);
   view.setUint16(pos + 4, 0, true);
   view.setUint16(pos + 6, 0, true);

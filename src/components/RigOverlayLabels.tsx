@@ -72,13 +72,13 @@ export function RigOverlayLabels({ nodes, hoveredBone }: Props) {
       <div className="hidden md:flex absolute bottom-16 left-4 flex-col gap-1 rounded-md border border-[#252D3D] bg-[#0B0E14]/88 px-2.5 py-1.5 text-[10px] text-[#B8C2D4] shadow-md backdrop-blur-xs">
         <div className="flex items-center gap-2 font-mono-tabular">
           <span className="h-1.5 w-1.5 rounded-full bg-[#34d399]" aria-hidden="true" />
-          <span className="text-[#EDF0F5] font-medium">mixamorig:RightHand</span>
+          <span className="text-[#EDF0F5] font-medium">mixamorig1_RightHand</span>
           <span className="text-[#8A95A8]">→ Thumb1..4 · Index1..4 · Middle1..4 · Ring1..4 · Pinky1..4</span>
         </div>
         <div className="flex items-center gap-2 font-mono-tabular">
           <span className="h-1.5 w-1.5 rounded-full bg-[#22d3ee]" aria-hidden="true" />
           <span className="text-[#EDF0F5] font-medium">
-            {leftWrist?.shortLabel ?? 'mixamorig:LeftHand'}
+            {leftWrist?.shortLabel ?? 'mixamorig1_LeftHand'}
           </span>
           <span className="text-[#8A95A8]">→ Hover joint to inspect bone</span>
         </div>

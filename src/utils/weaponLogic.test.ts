@@ -42,12 +42,14 @@ import {
   buildGodotWeaponMetadata,
   buildStoreZip,
   buildWeaponJsonExport,
+  buildWeaponRigDebugJson,
   computeCrc32,
   computeGodotWeaponCategory,
   computeGodotWeaponStats,
   generateGodotSceneTscn,
   generateGodotScriptGd,
   getExportedMovableParts,
+  runManifestSelfCheck,
   slugifyWeaponName,
   toGodotNodeName,
 } from './godotExporter';
@@ -205,8 +207,8 @@ test('harmonizeAccentColor returns valid 6-digit hex and theme application works
 test('applyDimensionPatch clamps values, resetAllDimensions restores defaults, and all slot shapePresets are in bounds', () => {
   const base = getInitialWeaponConfig();
   const patched = applyDimensionPatch(base, {
-    barrelLength: 0.95, // over max 0.64
-    gripAngle: 2, // under min 8
+    barrelLength: 0.95,
+    gripAngle: 2,
     opticMountHeight: 0.012,
   });
   assert.equal(patched.dimensions.barrelLength, 0.64);
@@ -260,7 +262,6 @@ test('every weapon slot exposes a width/thickness shape slider and expanded hard
     );
   }
 
-  // Verify stockWidth & underbarrelWidth clamping via applyDimensionPatch and sanitizeWeaponConfig
   const base = getInitialWeaponConfig();
   const clamped = applyDimensionPatch(base, {
     stockWidth: 3.5,
@@ -269,7 +270,6 @@ test('every weapon slot exposes a width/thickness shape slider and expanded hard
   assert.equal(clamped.dimensions.stockWidth, 1.48);
   assert.equal(clamped.dimensions.underbarrelWidth, 0.72);
 
-  // Verify all new receiver, muzzle, optic & underbarrel variants resolve without NaN or misalignment
   const combo = sanitizeWeaponConfig(
     {
       parts: {
@@ -293,7 +293,6 @@ test('every weapon slot exposes a width/thickness shape slider and expanded hard
   assert.ok(Math.abs(solved.opticMountPos.y - solved.receiverRailTopY) < 0.0001);
   assert.ok(solved.estimatedLengthCm > 60 && solved.estimatedLengthCm < 150);
 
-  // Also test smg_mp5, bolt_chassis, breacher_spike, handstop_kit, tactical_light, thermal_holo
   for (const receiver of ['scar_monolithic', 'smg_mp5', 'bolt_chassis'] as const) {
     const cfg = getInitialWeaponConfig();
     cfg.parts.receiver = receiver;
@@ -331,7 +330,6 @@ test('GLB export quality specs expose 500, 1K, 2K, and 4K tiers with valid filen
 });
 
 test('GLB binary rebuilder preserves 4-byte alignment, deduplicates identical images, and remaps bufferViews', () => {
-  // Build a minimal valid core glTF 2.0 GLB with 1 geometry bufferView + 2 identical image bufferViews + 1 trailing geometry view
   const geoBytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   const origImgBytes = new Uint8Array([0xff, 0xd8, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x11, 0xff, 0xd9]);
   const tailGeoBytes = new Uint8Array([21, 22, 23, 24]);
@@ -374,7 +372,6 @@ test('GLB binary rebuilder preserves 4-byte alignment, deduplicates identical im
   dv.setUint32(24 + paddedJsonLen, 0x004e4942, true);
   u8.set(binBuf, 28 + paddedJsonLen);
 
-  // Deduplicate identical images AND replace image 0 with compact 5-byte payload
   const compactImg = new Uint8Array([0xff, 0xd8, 0x42, 0xff, 0xd9]);
   const rebuilt = replaceGlbBufferViews(
     srcAb,
@@ -387,15 +384,15 @@ test('GLB binary rebuilder preserves 4-byte alignment, deduplicates identical im
 
   assert.equal(rebuilt.byteLength % 4, 0, 'Rebuilt GLB total length must be 4-byte aligned');
   const parsed = parseGlbChunks(rebuilt);
-  assert.equal(parsed.json.images?.length, 1, 'Identical duplicate images must collapse to 1');
+  assert.equal(parsed.json.images?.length, 1);
   assert.equal(parsed.json.textures?.[0].source, 0);
-  assert.equal(parsed.json.textures?.[1].source, 0, 'Duplicate texture source must remap to canonical image 0');
-  assert.equal(parsed.json.bufferViews?.length, 3, 'Dropped duplicate image bufferView must be compacted out');
-  assert.equal(parsed.json.accessors?.[1].bufferView, 2, 'Trailing geometry accessor must remap from bv 3 -> bv 2');
+  assert.equal(parsed.json.textures?.[1].source, 0);
+  assert.equal(parsed.json.bufferViews?.length, 3);
+  assert.equal(parsed.json.accessors?.[1].bufferView, 2);
   assert.equal(parsed.json.bufferViews?.[0].byteOffset, 0);
   assert.equal(parsed.json.bufferViews?.[1].byteOffset, 12);
   assert.equal(parsed.json.bufferViews?.[1].byteLength, 5);
-  assert.equal(parsed.json.bufferViews?.[2].byteOffset, 20, 'Trailing geometry view must stay 4-byte aligned');
+  assert.equal(parsed.json.bufferViews?.[2].byteOffset, 20);
   assert.equal(parsed.json.buffers?.[0].byteLength, 24);
   assert.deepEqual(Array.from(parsed.bin.subarray(0, 12)), Array.from(geoBytes));
   assert.deepEqual(Array.from(parsed.bin.subarray(12, 17)), Array.from(compactImg));
@@ -404,7 +401,6 @@ test('GLB binary rebuilder preserves 4-byte alignment, deduplicates identical im
 
 test('monochrome export tinting deduplicates single-tone metal/wood/polymer while protecting two-tone & camo', () => {
   const akTheme = STARTER_PRESETS[0].config.paints;
-  // Classic blued steel, walnut wood, and matte polymer are safely tintable
   assert.equal(isMonochromeTintable(akTheme.receiver), true);
   assert.equal(isMonochromeTintable(akTheme.barrel), true);
   assert.equal(isMonochromeTintable(akTheme.handguard), true);
@@ -417,7 +413,6 @@ test('monochrome export tinting deduplicates single-tone metal/wood/polymer whil
   assert.equal(receiverTint.basePaint.wear, barrelTint.basePaint.wear);
   assert.equal(receiverTint.tintHex, akTheme.receiver.primaryColor);
 
-  // Two-tone contrasting brushed steel must NOT collapse into monochrome tint
   assert.equal(
     isMonochromeTintable({
       ...akTheme.receiver,
@@ -426,14 +421,11 @@ test('monochrome export tinting deduplicates single-tone metal/wood/polymer whil
     }),
     false
   );
-  // Heavy battle-worn steel (>0.45 wear) preserves un-tinted silver scratch contrast
   assert.equal(isMonochromeTintable({ ...akTheme.receiver, wear: 0.72 }), false);
-  // Complex multi-color patterns stay untouched
   assert.equal(isMonochromeTintable({ ...akTheme.receiver, pattern: 'digital_camo' }), false);
   assert.equal(isMonochromeTintable({ ...akTheme.receiver, pattern: 'carbon' }), false);
   assert.equal(isMonochromeTintable({ ...akTheme.receiver, pattern: 'hex_tech' }), false);
 
-  // 4-tier perceptual wear quantization and JPEG quality progression
   assert.equal(quantizeExportWear(0.05), 0.0);
   assert.equal(quantizeExportWear(0.18), 0.22);
   assert.equal(quantizeExportWear(0.34), 0.22);
@@ -457,7 +449,6 @@ test('Godot 4 socket constraints resolve finite meter-scale positions across all
     assert.ok(m.socketHandRPos.y < m.triggerPivotPos.y, `${preset.id} right hand palm must sit below trigger`);
   }
 
-  // Raising optic mount height must raise Socket_ADS by the exact mount delta
   for (const optic of SLOT_SPECS.optic.variants) {
     const low = getInitialWeaponConfig();
     low.parts.optic = optic.id as typeof low.parts.optic;
@@ -512,7 +503,6 @@ test('computeGodotWeaponStats & category output all Godot 4.7.2 fields accuratel
     assert.ok(stats.range_m >= 25);
   }
 
-  // Bolt-action suppressed sniper
   const sniper = getInitialWeaponConfig();
   sniper.parts.receiver = 'bolt_chassis';
   sniper.parts.barrel = 'heavy_sniper';
@@ -531,7 +521,6 @@ test('computeGodotWeaponStats & category output all Godot 4.7.2 fields accuratel
   assert.ok(sniperStats.damage >= 90);
   assert.ok(sniperStats.range_m >= 400);
 
-  // Compact stockless pistol classification
   const pistol = getInitialWeaponConfig();
   pistol.parts.receiver = 'smg_mp5';
   pistol.parts.barrel = 'compact_smg';
@@ -543,13 +532,11 @@ test('computeGodotWeaponStats & category output all Godot 4.7.2 fields accuratel
   assert.equal(computeGodotWeaponCategory(pistol, pistolM), 'pistol');
   assert.equal(computeGodotWeaponStats(pistol, pistolM).fire_mode, 'semi');
 
-  // SMG classification
   const smg = getInitialWeaponConfig();
   smg.parts.receiver = 'smg_mp5';
   smg.parts.magazine = 'smg_stick';
   assert.equal(computeGodotWeaponCategory(smg, resolveMechanicalConstraints(smg)), 'smg');
 
-  // LMG + integral suppressed + drum mag
   const lmg = getInitialWeaponConfig();
   lmg.parts.receiver = 'scifi_rail';
   lmg.parts.magazine = 'drum_mag';
@@ -561,7 +548,6 @@ test('computeGodotWeaponStats & category output all Godot 4.7.2 fields accuratel
   assert.equal(lmgStats.suppressed, true);
   assert.equal(lmgStats.mag_size, 75);
 
-  // Shotgun classification with masterkey_shotgun short barrel
   const shotty = getInitialWeaponConfig();
   shotty.parts.handguard = 'tactical_mlok';
   shotty.parts.underbarrel = 'masterkey_shotgun';
@@ -571,89 +557,132 @@ test('computeGodotWeaponStats & category output all Godot 4.7.2 fields accuratel
   assert.equal(computeGodotWeaponStats(shotty, shottyM).pellet_count, 8);
 });
 
-test('buildGodotWeaponMetadata & buildWeaponJsonExport expose exact sockets, movable_parts, dimensions_m and Load JSON compatibility', () => {
+test('runtime manifest matches exact clean schema (no hand_rig/bones/world_position) & passes all 15 self-checks across all presets & variants', () => {
   const cfg = getInitialWeaponConfig();
   const m = resolveMechanicalConstraints(cfg);
   const exported = buildWeaponJsonExport(cfg, m, [0.064, 0.285, 0.92]);
 
+  assert.deepEqual(
+    Object.keys(exported).sort(),
+    [
+      'weapon_id',
+      'name',
+      'category',
+      'forward_axis',
+      'units',
+      'socket_semantics',
+      'is_joint',
+      'stats',
+      'dimensions_m',
+      'movable_parts',
+      'parts',
+      'dimensions',
+      'paints',
+      'sockets',
+    ].sort()
+  );
+
   assert.equal(exported.weapon_id, 'ak_47_classic');
   assert.equal(exported.forward_axis, '-Z');
   assert.equal(exported.units, 'meters');
+  assert.equal(exported.socket_semantics, 'grip_contact_point');
+  assert.equal(exported.is_joint, false);
   assert.deepEqual(exported.dimensions_m, [0.064, 0.285, 0.92]);
 
-  // Explicit hand orientation & contact-point contract
-  assert.equal(exported.hand_orientation.socket_semantics, 'grip_contact_point');
-  assert.equal(exported.hand_orientation.is_joint, false);
-  assert.equal(exported.hand_orientation.finger_axis, '-Z');
-  assert.equal(exported.hand_orientation.up_axis, '+Y');
-  assert.match(exported.hand_orientation.description, /contact points/i);
-  assert.match(exported.hand_orientation.description, /wrist joints/i);
-
-  // Grip sockets sit on exterior side contact surfaces (not x=0 inside mesh) and tilt with grip/handguard
+  // Verify Socket_Grip_Right & Socket_Grip_Left follow new weapon-space axis contract
   const rightGrip = exported.sockets.Socket_Grip_Right;
-  assert.equal(rightGrip.socket_role, 'grip_contact_point');
-  assert.ok(rightGrip.position[0] > 0.012, 'Socket_Grip_Right must sit on +X exterior surface');
-  assert.equal(rightGrip.position[1], 0);
-  assert.equal(rightGrip.position[2], 0);
-  assert.deepEqual(rightGrip.contact_normal, [1, 0, 0]);
-  assert.ok(rightGrip.rotation[0] < -0.2, 'Socket_Grip_Right X rotation must reflect pistol grip angle');
-  assert.ok(rightGrip.grip_forward[2] < -0.85 && rightGrip.grip_forward[1] < -0.2);
-  assert.ok(rightGrip.grip_up[1] > 0.85 && rightGrip.grip_up[2] < -0.2);
+  assert.deepEqual(rightGrip.position, [0, 0, 0]);
+  assert.deepEqual(rightGrip.rotation, [0, 0, 0]);
+  assert.ok(rightGrip.wrist_offset_weapon_space);
+  assert.ok(Math.abs(rightGrip.wrist_offset_weapon_space[0] - 0.0413) < 0.005);
+  assert.ok(Math.abs(rightGrip.wrist_offset_weapon_space[2] - 0.0595) < 0.005);
+  assert.ok(rightGrip.hand_y_axis && rightGrip.hand_y_axis[2] < -0.9);
+  assert.ok(rightGrip.hand_x_axis && rightGrip.hand_x_axis[0] > 0.9);
 
   const leftGrip = exported.sockets.Socket_Grip_Left;
-  assert.equal(leftGrip.socket_role, 'grip_contact_point');
-  assert.ok(leftGrip.position[0] < -0.015, 'Socket_Grip_Left must sit on -X exterior handguard/grip surface');
-  assert.ok(leftGrip.contact_normal && leftGrip.contact_normal[0] < -0.5);
-  assert.ok(leftGrip.grip_up[1] > 0.5 && leftGrip.grip_up[0] < -0.4);
+  assert.ok(leftGrip.position[0] < 0 && leftGrip.position[2] < -0.1);
+  assert.deepEqual(leftGrip.rotation, [0, 0, 0]);
+  assert.ok(leftGrip.wrist_offset_weapon_space);
+  assert.ok(leftGrip.hand_y_axis && leftGrip.hand_y_axis[2] < -0.9);
+  assert.ok(leftGrip.hand_x_axis && leftGrip.hand_x_axis[0] > 0.5);
 
-  // Every socket emits orthonormal unit grip_forward & grip_up vectors
-  for (const [sockName, sock] of Object.entries(exported.sockets)) {
-    const fLen = Math.hypot(...sock.grip_forward);
-    const uLen = Math.hypot(...sock.grip_up);
-    const dot =
-      sock.grip_forward[0] * sock.grip_up[0] +
-      sock.grip_forward[1] * sock.grip_up[1] +
-      sock.grip_forward[2] * sock.grip_up[2];
-    assert.ok(Math.abs(fLen - 1) < 1e-3, `${sockName}.grip_forward must be unit length`);
-    assert.ok(Math.abs(uLen - 1) < 1e-3, `${sockName}.grip_up must be unit length`);
-    assert.ok(Math.abs(dot) < 1e-3, `${sockName} grip_forward and grip_up must be orthogonal`);
+  // Verify Socket_Shoulder derivation
+  const shoulder = exported.sockets.Socket_Shoulder;
+  assert.ok(shoulder, 'Stocked weapon must emit Socket_Shoulder');
+  assert.deepEqual(shoulder.rotation, [0, 0, 0]);
+  assert.equal(shoulder.position[0], 0);
+  assert.equal(shoulder.position[1], -cfg.dimensions.stockDrop);
+  assert.ok(
+    Math.abs(shoulder.position[2] - (exported.sockets.Socket_Muzzle.position[2] + 0.92)) <= 0.001
+  );
+
+  // Verify zero forbidden strings in serialized runtime manifest
+  const jsonText = JSON.stringify(exported);
+  for (const forbidden of [
+    'hand_rig',
+    'hand_orientation',
+    '"bones"',
+    'world_position',
+    'HandRig_',
+    'quaternion',
+    'phalanx',
+    'bone_forward',
+    'mixamorig:',
+    'runtime_outward_along_contact_normal',
+  ]) {
+    assert.equal(jsonText.includes(forbidden), false, `Forbidden token "${forbidden}" found in runtime manifest`);
   }
 
-  assert.ok(exported.sockets.Socket_Muzzle.position[2] < -0.5);
-  assert.ok(exported.sockets.Socket_ADS);
-  assert.ok(exported.sockets.Socket_Eject.position[0] > 0);
-  assert.deepEqual(exported.sockets.Socket_Eject.contact_normal, [1, 0, 0]);
-  assert.ok(exported.sockets.Socket_Mag);
-  assert.ok(exported.sockets.Socket_Optic);
-  assert.ok(exported.sockets.Socket_Underbarrel);
+  // Test stockless pistol omits Socket_Shoulder
+  const stockless = getInitialWeaponConfig();
+  stockless.parts.stock = 'none';
+  stockless.parts.handguard = 'none';
+  stockless.parts.magazine = 'none';
+  const stocklessMeta = buildGodotWeaponMetadata(stockless, resolveMechanicalConstraints(stockless));
+  assert.equal(stocklessMeta.sockets.Socket_Shoulder, undefined);
+  assert.equal(stocklessMeta.sockets.Socket_Underbarrel, undefined);
+  assert.equal(getExportedMovableParts(stockless).includes('Part_Magazine'), false);
+  assert.equal(getExportedMovableParts(stockless).includes('Part_Stock'), false);
 
-  // Vertical foregrip places Socket_Grip_Left on -X side of vertical shaft with vertical grip_up [0, 1, 0]
-  const vfgCfg = getInitialWeaponConfig();
-  vfgCfg.parts.handguard = 'tactical_mlok';
-  vfgCfg.parts.underbarrel = 'vertical_grip';
-  const vfgSockets = buildGodotSocketsMap(vfgCfg, resolveMechanicalConstraints(vfgCfg));
-  assert.ok(vfgSockets.Socket_Grip_Left.position[0] < -0.012);
-  assert.deepEqual(vfgSockets.Socket_Grip_Left.grip_up, [0, 1, 0]);
-  assert.deepEqual(vfgSockets.Socket_Grip_Left.grip_forward, [0, 0, -1]);
-  assert.deepEqual(vfgSockets.Socket_Grip_Left.contact_normal, [-1, 0, 0]);
+  // Run all 15 Part 4 self-checks across all starter presets, stockless build, all 9 underbarrels, and grip extremes
+  const checkConfigs: Array<{ label: string; cfg: typeof cfg }> = [
+    ...STARTER_PRESETS.map((p) => ({ label: `preset:${p.id}`, cfg: p.config })),
+    { label: 'stockless', cfg: stockless },
+    ...SLOT_SPECS.underbarrel.variants.map((ub) => {
+      const c = getInitialWeaponConfig();
+      c.parts.handguard = 'tactical_mlok';
+      c.parts.underbarrel = ub.id as typeof c.parts.underbarrel;
+      return { label: `underbarrel:${ub.id}`, cfg: c };
+    }),
+    ...SLOT_SPECS.grip.variants.map((g) => {
+      const c = getInitialWeaponConfig();
+      c.parts.grip = g.id as typeof c.parts.grip;
+      return { label: `grip:${g.id}`, cfg: c };
+    }),
+  ];
 
-  assert.ok(exported.movable_parts.includes('Part_Magazine'));
-  assert.ok(exported.movable_parts.includes('Part_Bolt'));
-  assert.ok(exported.movable_parts.includes('Part_Trigger'));
-
-  // Removing handguard omits Socket_Underbarrel; removing magazine omits Part_Magazine
-  const stripped = getInitialWeaponConfig();
-  stripped.parts.handguard = 'none';
-  stripped.parts.magazine = 'none';
-  const strippedSockets = buildGodotSocketsMap(stripped, resolveMechanicalConstraints(stripped));
-  assert.equal(strippedSockets.Socket_Underbarrel, undefined);
-  assert.equal(getExportedMovableParts(stripped).includes('Part_Magazine'), false);
+  for (const { label, cfg: testCfg } of checkConfigs) {
+    const solvedM = resolveMechanicalConstraints(testCfg);
+    const manifest = buildGodotWeaponMetadata(testCfg, solvedM);
+    const results = runManifestSelfCheck(manifest, testCfg.parts.stock !== 'none');
+    for (const r of results) {
+      assert.equal(r.pass, true, `${label} failed check #${r.id} (${r.label}): ${r.detail}`);
+    }
+  }
 
   // Round-trip through sanitizeWeaponConfig (Load JSON backwards compatibility)
-  const roundTripped = sanitizeWeaponConfig(JSON.parse(JSON.stringify(exported)), STARTER_PRESETS[1].config);
+  const roundTripped = sanitizeWeaponConfig(JSON.parse(jsonText), STARTER_PRESETS[1].config);
   assert.deepEqual(roundTripped.parts, cfg.parts);
   assert.deepEqual(roundTripped.dimensions, cfg.dimensions);
   assert.equal(roundTripped.name, cfg.name);
+
+  // Verify buildWeaponRigDebugJson emits separate debug payload cleanly
+  const debugJson = buildWeaponRigDebugJson(cfg, m);
+  assert.equal(debugJson.game_must_not_load, true);
+  assert.equal(debugJson.mixamo_prefix, 'mixamorig1_');
+  assert.equal(debugJson.finger_axis, '+Y');
+  assert.equal(debugJson.bones.RightHand.parent, 'mixamorig1_RightForeArm');
+  assert.equal(debugJson.bones.LeftHand.parent, 'mixamorig1_LeftForeArm');
 });
 
 test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scene, typed GDScript, and CRC-verified zip', () => {
@@ -684,25 +713,12 @@ test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scen
   assert.match(gd, /extends Node3D/);
   assert.match(gd, /@export var weapon_id: String = "ak_47_classic"/);
   assert.match(gd, /var category: String = "assault_rifle"/);
-  assert.match(gd, /CONTACT POINTS \(NOT wrist joints\)/);
-  assert.match(gd, /static func solve_grip_basis\(grip_forward: Vector3, grip_up: Vector3\) -> Basis/);
-  assert.match(gd, /func get_socket_basis\(socket: Node3D\) -> Basis/);
-  assert.match(gd, /func get_hand_bone\(bone_name: String\) -> Node3D/);
-  assert.match(gd, /func get_hand_bone_poses\(side: String, use_mixamo_prefix: bool = false\) -> Dictionary/);
-  assert.match(gd, /replace\("mixamorig:", ""\)/);
-  assert.match(gd, /find_child\("RightHand", true, false\)/);
-  assert.match(gd, /find_child\("LeftHand", true, false\)/);
-  assert.match(gd, /find_child\("Socket_Muzzle", true, false\)/);
-  assert.match(gd, /find_child\("Socket_Grip_Right", true, false\)/);
-  assert.match(gd, /find_child\("Socket_Grip_Left", true, false\)/);
-  assert.match(gd, /find_child\("Socket_ADS", true, false\)/);
-  assert.match(gd, /find_child\("Socket_Eject", true, false\)/);
-  assert.match(gd, /find_child\("Socket_Mag", true, false\)/);
-  assert.match(gd, /find_child\("Socket_Optic", true, false\)/);
-  assert.match(gd, /find_child\("Socket_Underbarrel", true, false\)/);
-  assert.match(gd, /find_child\("Part_Bolt", true, false\)/);
-  assert.match(gd, /find_child\("Part_Magazine", true, false\)/);
-  assert.match(gd, /find_child\("Part_Trigger", true, false\)/);
+  assert.match(gd, /MIXAMO_PREFIX := "mixamorig1_"/);
+  assert.match(gd, /palm_centre = wrist \+ hand_bone_\+Y \* wrist_to_palm_distance/);
+  assert.match(gd, /static func solve_hand_basis\(hand_x_axis: Vector3, hand_y_axis: Vector3\) -> Basis/);
+  assert.match(gd, /find_child\("Socket_Shoulder", true, false\)/);
+  assert.equal(gd.includes('mixamorig:'), false);
+  assert.equal(gd.includes('runtime_outward_along_contact_normal'), false);
 
   // Known IEEE 802.3 CRC-32 test vector: CRC32("123456789") === 0xcbf43926
   const vec = new TextEncoder().encode('123456789');
@@ -719,7 +735,7 @@ test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scen
   assert.equal(dv.getUint16(zip.byteLength - 12, true), 2, 'ZIP EOCD entry count must equal 2');
 });
 
-test('resolveMixamoHandRig outputs 42 Mixamo wrist+finger bones across all 9 underbarrel variants with exact FK alignment', () => {
+test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid parents, and exact FK alignment across all 9 underbarrel variants', () => {
   const configs: Array<{
     label: string;
     mutate?: (cfg: ReturnType<typeof getInitialWeaponConfig>) => void;
@@ -829,22 +845,22 @@ test('resolveMixamoHandRig outputs 42 Mixamo wrist+finger bones across all 9 und
     const rig = resolveMixamoHandRig(cfg, m);
 
     assert.equal(rig.naming_convention, 'mixamo');
-    assert.equal(rig.mixamo_prefix, 'mixamorig:');
+    assert.equal(rig.mixamo_prefix, 'mixamorig1_');
+    assert.equal(rig.finger_axis, '+Y');
     assert.equal(rig.bone_longitudinal_axis, '+Y');
-    assert.equal(rig.total_bones, 42);
+    assert.equal((rig as unknown as Record<string, unknown>).total_bones, undefined);
     assert.equal(rig.left_grip_style, entry.expectedLeftStyle);
     assert.equal(rig.left_grip_placement, entry.expectedPlacement);
-    assert.equal(rig.wrist_mixamo_names.right, 'mixamorig:RightHand');
-    assert.equal(rig.wrist_mixamo_names.left, 'mixamorig:LeftHand');
+    assert.equal(rig.wrist_mixamo_names.right, 'mixamorig1_RightHand');
+    assert.equal(rig.wrist_mixamo_names.left, 'mixamorig1_LeftHand');
     assert.equal(MIXAMO_RIGHT_BONE_NAMES.length, 21);
     assert.equal(MIXAMO_LEFT_BONE_NAMES.length, 21);
     assert.deepEqual(Object.keys(rig.bones).sort(), [...ALL_MIXAMO_HAND_BONE_NAMES].sort());
 
     for (const boneName of ALL_MIXAMO_HAND_BONE_NAMES) {
-      assert.equal(rig.bones[boneName].mixamo_name, `mixamorig:${boneName}`);
+      assert.equal(rig.bones[boneName].mixamo_name, `mixamorig1_${boneName}`);
     }
 
-    // Reconstruct forward kinematics from HandRig_* root to verify local (position, quaternion) === world_position
     const resolveWorldMat = (boneName: string): THREE.Matrix4 => {
       const b = rig.bones[boneName];
       assert.ok(b, `Missing bone ${boneName}`);
@@ -853,10 +869,11 @@ test('resolveMixamoHandRig outputs 42 Mixamo wrist+finger bones across all 9 und
         new THREE.Quaternion(...b.quaternion),
         new THREE.Vector3(1, 1, 1)
       );
-      if (b.parent === 'HandRig_Right' || b.parent === 'HandRig_Left') {
+      if (b.parent === 'mixamorig1_RightForeArm' || b.parent === 'mixamorig1_LeftForeArm') {
         return localMat;
       }
-      return resolveWorldMat(b.parent).multiply(localMat);
+      const parentShort = b.parent.replace(/^mixamorig1_/, '');
+      return resolveWorldMat(parentShort).multiply(localMat);
     };
 
     for (const boneName of ALL_MIXAMO_HAND_BONE_NAMES) {
@@ -872,18 +889,20 @@ test('resolveMixamoHandRig outputs 42 Mixamo wrist+finger bones across all 9 und
       );
     }
 
-    // Check anatomical segment lengths and parent chain (*1 -> *2 -> *3 -> *4)
     for (const side of ['Right', 'Left'] as const) {
       const wristName = `${side}Hand`;
       assert.equal(rig.bones[wristName].phalanx, 0);
+      assert.equal(rig.bones[wristName].parent, `mixamorig1_${side}ForeArm`);
       for (const finger of MIXAMO_FINGERS) {
         for (let p = 1; p <= 4; p++) {
           const name = `${wristName}${finger}${p}`;
           const bone = rig.bones[name];
           assert.equal(bone.phalanx, p);
-          assert.equal(bone.parent, p === 1 ? wristName : `${wristName}${finger}${p - 1}`);
+          assert.equal(
+            bone.parent,
+            p === 1 ? `mixamorig1_${wristName}` : `mixamorig1_${wristName}${finger}${p - 1}`
+          );
           if (p >= 2) {
-            // Mixamo +Y longitudinal bone offset: child local X and Z are ~0, Y is positive segment length
             assert.ok(
               Math.abs(bone.position[0]) < 0.001 && Math.abs(bone.position[2]) < 0.001,
               `${entry.label}.${name} must extend along parent +Y axis, got ${JSON.stringify(bone.position)}`
@@ -897,7 +916,6 @@ test('resolveMixamoHandRig outputs 42 Mixamo wrist+finger bones across all 9 und
       }
     }
 
-    // Index fingertip reaches near trigger pivot
     const trigRel = new THREE.Vector3(
       m.triggerPivotPos.x - m.gripPivotPos.x,
       m.triggerPivotPos.y - m.gripPivotPos.y,
@@ -909,12 +927,4 @@ test('resolveMixamoHandRig outputs 42 Mixamo wrist+finger bones across all 9 und
       `${entry.label} RightHandIndex4 tip must reach trigger (${idxTip.distanceTo(trigRel).toFixed(4)}m)`
     );
   }
-
-  // Verify buildWeaponJsonExport embeds hand_rig cleanly
-  const ak = getInitialWeaponConfig();
-  const akM = resolveMechanicalConstraints(ak);
-  const jsonExport = buildWeaponJsonExport(ak, akM);
-  assert.equal(jsonExport.hand_rig.total_bones, 42);
-  assert.equal(jsonExport.hand_rig.wrist_bones.right, 'RightHand');
-  assert.equal(jsonExport.hand_rig.wrist_bones.left, 'LeftHand');
 });

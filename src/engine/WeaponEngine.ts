@@ -22,7 +22,7 @@ import {
   recompressGlbJpegs,
 } from '../utils/glbOptimizer';
 import { buildGodotWeaponMetadata } from '../utils/godotExporter';
-import { MIXAMO_FINGERS } from '../utils/handRig';
+import { MIXAMO_BONE_PREFIX, MIXAMO_FINGERS } from '../utils/handRig';
 import { getGlbExportSpec, resolveMechanicalConstraints } from '../utils/weaponLogic';
 import {
   buildWeaponSceneGraph,
@@ -1055,6 +1055,9 @@ export class WeaponEngine {
       { obj: this.rig.socketMag, shortLabel: 'Mag', color: '#3b82f6' },
       { obj: this.rig.socketOptic, shortLabel: 'Optic', color: '#eab308' },
     ];
+    if (this.rig.socketShoulder) {
+      list.push({ obj: this.rig.socketShoulder, shortLabel: 'Shoulder', color: '#f97316' });
+    }
     if (this.rig.socketUnderbarrel) {
       list.push({ obj: this.rig.socketUnderbarrel, shortLabel: 'Underbarrel', color: '#14b8a6' });
     }
@@ -1175,7 +1178,7 @@ export class WeaponEngine {
       wMesh.renderOrder = 1001;
       wMesh.userData.trackTarget = wristBone;
       wMesh.userData.boneName = wristName;
-      wMesh.userData.mixamoName = `mixamorig:${wristName}`;
+      wMesh.userData.mixamoName = `${MIXAMO_BONE_PREFIX}${wristName}`;
       wMesh.userData.hand = side.toLowerCase();
       this.rigGizmoGroup.add(wMesh);
       this.handBoneGizmos.push(wMesh);
@@ -1193,7 +1196,7 @@ export class WeaponEngine {
           jMesh.renderOrder = 1001;
           jMesh.userData.trackTarget = bone;
           jMesh.userData.boneName = boneName;
-          jMesh.userData.mixamoName = `mixamorig:${boneName}`;
+          jMesh.userData.mixamoName = `${MIXAMO_BONE_PREFIX}${boneName}`;
           jMesh.userData.hand = side.toLowerCase();
           this.rigGizmoGroup.add(jMesh);
           this.handBoneGizmos.push(jMesh);
@@ -1309,8 +1312,8 @@ export class WeaponEngine {
 
     const leftModeLabel = this.getLeftGripOverlayLabel();
     for (const [wristName, label, color] of [
-      ['RightHand', 'mixamorig:RightHand', '#34d399'],
-      ['LeftHand', `mixamorig:LeftHand · ${leftModeLabel}`, '#22d3ee'],
+      ['RightHand', `${MIXAMO_BONE_PREFIX}RightHand`, '#34d399'],
+      ['LeftHand', `${MIXAMO_BONE_PREFIX}LeftHand · ${leftModeLabel}`, '#22d3ee'],
     ] as const) {
       const wrist = this.rig.handBones.get(wristName);
       if (!wrist) continue;
@@ -1480,6 +1483,22 @@ export class WeaponEngine {
     const partBolt = exportRoot.getObjectByName('Part_Bolt');
     const partTrigger = exportRoot.getObjectByName('Part_Trigger');
     const partMagazine = exportRoot.getObjectByName('Part_Magazine');
+    const handRigRight = exportRoot.getObjectByName('HandRig_Right');
+    const handRigLeft = exportRoot.getObjectByName('HandRig_Left');
+    if (handRigRight) exportRoot.remove(handRigRight);
+    if (handRigLeft) exportRoot.remove(handRigLeft);
+
+    // Strip any Bone / Light / Camera objects so GLB contains zero armature, camera, or light data
+    const forbiddenNodes: THREE.Object3D[] = [];
+    exportRoot.traverse((obj) => {
+      if ((obj as THREE.Bone).isBone || (obj as THREE.Light).isLight || (obj as THREE.Camera).isCamera) {
+        forbiddenNodes.push(obj);
+      }
+    });
+    for (const node of forbiddenNodes) {
+      node.parent?.remove(node);
+    }
+
     if (partStock) partStock.rotation.set(0, 0, 0);
     if (partBolt) {
       partBolt.position.set(
@@ -1503,8 +1522,7 @@ export class WeaponEngine {
     }
 
     // Shift all direct children by -gripPivotPos so WeaponRoot origin (0, 0, 0) stays centered
-    // at the pistol grip centerline pivot while Socket_Grip_Right sits on the +X outer grip surface
-    // in Godot 4.7.2 coordinates (1 unit = 1 meter, -Z forward, +Y up, +X right)
+    // at the pistol grip centerline pivot in Godot 4.7.2 coordinates (1 unit = 1 meter, -Z forward, +Y up, +X right)
     const gripOrigin = this.currentMechanics.gripPivotPos;
     for (const child of exportRoot.children) {
       child.position.set(
@@ -1530,6 +1548,15 @@ export class WeaponEngine {
       this.currentMechanics,
       exactDimensionsM
     );
+
+    const exportShoulder = exportRoot.getObjectByName('Socket_Shoulder');
+    if (metadata.sockets.Socket_Shoulder) {
+      if (exportShoulder) {
+        exportShoulder.position.set(...metadata.sockets.Socket_Shoulder.position);
+      }
+    } else if (exportShoulder) {
+      exportRoot.remove(exportShoulder);
+    }
 
     const createdGeos: THREE.BufferGeometry[] = [];
     const clonedMaterials: THREE.Material[] = [];
@@ -1565,21 +1592,34 @@ export class WeaponEngine {
           await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
         }
 
-        const cloned = origMat.clone();
-        cloned.wireframe = false;
-        if (isSlotMat) {
-          cloned.emissive.set(0x000000);
-          cloned.emissiveIntensity = 0;
+        // Always emit pure core glTF 2.0 MeshStandardMaterial (never MeshPhysicalMaterial clearcoat/sheen/transmission/ior)
+        const stdMat = new THREE.MeshStandardMaterial({
+          name: origMat.name,
+          color: origMat.color.clone(),
+          metalness: origMat.metalness,
+          roughness: origMat.roughness,
+          normalScale: origMat.normalScale.clone(),
+          envMapIntensity: origMat.envMapIntensity,
+          transparent: origMat.transparent,
+          opacity: origMat.opacity,
+          depthWrite: origMat.depthWrite,
+          side: origMat.side,
+          wireframe: false,
+        });
+
+        if (!isSlotMat) {
+          stdMat.emissive.copy(origMat.emissive);
+          stdMat.emissiveIntensity = origMat.emissiveIntensity;
         }
 
         const monoTint = buildMonochromeExportTint(paint);
         if (monoTint) {
           const maps = cache.getMaps(monoTint.basePaint);
-          cloned.color.set(monoTint.tintHex);
-          cloned.map = maps.map;
-          cloned.normalMap = maps.normalMap;
-          cloned.roughnessMap = maps.roughnessMap;
-          cloned.metalnessMap = maps.metalnessMap;
+          stdMat.color.set(monoTint.tintHex);
+          stdMat.map = maps.map;
+          stdMat.normalMap = maps.normalMap;
+          stdMat.roughnessMap = maps.roughnessMap;
+          stdMat.metalnessMap = maps.metalnessMap;
           if (isSlotMat) {
             primaryMonoSignatures.add(monoSig(monoTint.basePaint));
           }
@@ -1589,15 +1629,15 @@ export class WeaponEngine {
             wear: quantizeExportWear(paint.wear),
           };
           const maps = cache.getMaps(exportPaint);
-          cloned.color.set('#ffffff');
-          cloned.map = maps.map;
-          cloned.normalMap = maps.normalMap;
-          cloned.roughnessMap = maps.roughnessMap;
-          cloned.metalnessMap = maps.metalnessMap;
+          stdMat.color.set('#ffffff');
+          stdMat.map = maps.map;
+          stdMat.normalMap = maps.normalMap;
+          stdMat.roughnessMap = maps.roughnessMap;
+          stdMat.metalnessMap = maps.metalnessMap;
         }
-        cloned.needsUpdate = true;
-        materialMap.set(origMat, cloned);
-        clonedMaterials.push(cloned);
+        stdMat.needsUpdate = true;
+        materialMap.set(origMat, stdMat);
+        clonedMaterials.push(stdMat);
       };
 
       // Bake primary slot materials first
@@ -1622,6 +1662,24 @@ export class WeaponEngine {
           reusePrimary ? exportCache : auxExportCache,
           false
         );
+      }
+
+      // Convert opticLens from MeshPhysicalMaterial (clearcoat/ior) to pure MeshStandardMaterial
+      if (usedMaterials.has(this.materials.opticLens)) {
+        const src = this.materials.opticLens;
+        const stdOptic = new THREE.MeshStandardMaterial({
+          name: src.name,
+          color: src.color.clone(),
+          metalness: src.metalness,
+          roughness: src.roughness,
+          envMapIntensity: src.envMapIntensity,
+          transparent: src.transparent,
+          opacity: src.opacity,
+          depthWrite: src.depthWrite,
+          side: src.side,
+        });
+        materialMap.set(src, stdOptic);
+        clonedMaterials.push(stdOptic);
       }
 
       // 2. Weld non-indexed vertices, deduplicate identical BufferGeometries, bind cloned materials,
