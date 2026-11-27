@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { cloneWeaponConfig, SLOT_SPECS, STARTER_PRESETS } from '../data/catalog';
+import { parseGlbChunks } from '../utils/glbOptimizer';
+import {
+  buildGlbEmbeddedExtras,
+  buildGlbSocketExtrasMap,
+  buildGodotWeaponMetadata,
+} from '../utils/godotExporter';
 import { ALL_MIXAMO_HAND_BONE_NAMES, MIXAMO_FINGERS, resolveMixamoHandRig } from '../utils/handRig';
 import { resolveMechanicalConstraints } from '../utils/weaponLogic';
 import { buildWeaponSceneGraph, WeaponMaterials } from './geometryBuilders';
@@ -540,5 +547,150 @@ test('WeaponRoot embeds full Mixamo RightHand & LeftHand bone trees across all 9
       }
     }
   }
+});
+
+test('exported binary GLB embeds metadata and 42 hand bone rotations in WeaponRoot and Socket_Grip_* extras with zero Bone nodes or disallowed extensions', async () => {
+  if (typeof globalThis.FileReader === 'undefined') {
+    (globalThis as unknown as { FileReader: unknown }).FileReader = class {
+      result: ArrayBuffer | string | null = null;
+      onloadend: (() => void) | null = null;
+      onerror: ((err: unknown) => void) | null = null;
+      readAsArrayBuffer(blob: Blob) {
+        blob
+          .arrayBuffer()
+          .then((buf) => {
+            this.result = buf;
+            this.onloadend?.();
+          })
+          .catch((err) => this.onerror?.(err));
+      }
+      readAsDataURL(blob: Blob) {
+        blob
+          .arrayBuffer()
+          .then((buf) => {
+            this.result =
+              `data:${blob.type || 'application/octet-stream'};base64,` +
+              Buffer.from(buf).toString('base64');
+            this.onloadend?.();
+          })
+          .catch((err) => this.onerror?.(err));
+      }
+    };
+  }
+
+  const phys = new THREE.MeshPhysicalMaterial({ color: '#444444', roughness: 0.5, metalness: 0.5 });
+  const std = new THREE.MeshStandardMaterial({ color: '#444444', roughness: 0.5, metalness: 0.5 });
+  const mats: WeaponMaterials = {
+    bySlot: {
+      receiver: phys,
+      barrel: phys,
+      handguard: phys,
+      stock: phys,
+      magazine: phys,
+      grip: phys,
+      muzzle: phys,
+      optic: phys,
+      underbarrel: phys,
+    },
+    darkSteel: std,
+    chromeSteel: std,
+    brass: std,
+    rubber: std,
+    opticLens: std,
+    emissiveAmber: std,
+    emissiveCyan: std,
+    emissiveRed: std,
+  };
+
+  const cfg = cloneWeaponConfig(STARTER_PRESETS[0].config);
+  const m = resolveMechanicalConstraints(cfg);
+  const rig = buildWeaponSceneGraph(cfg, m, mats);
+  const exportRoot = rig.root.clone(true);
+
+  for (const name of ['HandRig_Right', 'HandRig_Left']) {
+    const obj = exportRoot.getObjectByName(name);
+    if (obj) exportRoot.remove(obj);
+  }
+  const gripOrigin = m.gripPivotPos;
+  for (const child of exportRoot.children) {
+    child.position.set(
+      Math.round((child.position.x - gripOrigin.x) * 1e5) / 1e5,
+      Math.round((child.position.y - gripOrigin.y) * 1e5) / 1e5,
+      Math.round((child.position.z - gripOrigin.z) * 1e5) / 1e5
+    );
+  }
+  exportRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(exportRoot);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const dims: [number, number, number] = [
+    Math.round(size.x * 1e4) / 1e4,
+    Math.round(size.y * 1e4) / 1e4,
+    Math.round(size.z * 1e4) / 1e4,
+  ];
+  const meta = buildGodotWeaponMetadata(cfg, m, dims);
+
+  exportRoot.traverse((o) => {
+    o.userData = {};
+  });
+  exportRoot.userData = buildGlbEmbeddedExtras(meta, cfg, m);
+  const socketExtrasMap = buildGlbSocketExtrasMap(meta, cfg, m);
+  for (const [socketName, socketExtras] of Object.entries(socketExtrasMap)) {
+    const node = exportRoot.getObjectByName(socketName);
+    if (node) node.userData = socketExtras;
+  }
+
+  const exporter = new GLTFExporter();
+  const glbBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+    exporter.parse(
+      exportRoot,
+      (res) => resolve(res as ArrayBuffer),
+      reject,
+      { binary: true, trs: true }
+    );
+  });
+  const parsed = parseGlbChunks(glbBuffer);
+  const gltf = parsed.json as {
+    extensionsUsed?: string[];
+    skins?: unknown[];
+    cameras?: unknown[];
+    animations?: unknown[];
+    nodes?: Array<{ name?: string; extras?: Record<string, unknown> }>;
+  };
+
+  assert.equal((gltf.skins ?? []).length, 0);
+  assert.equal((gltf.cameras ?? []).length, 0);
+  assert.equal((gltf.animations ?? []).length, 0);
+  for (const ext of gltf.extensionsUsed ?? []) {
+    assert.equal(
+      ['KHR_materials_clearcoat', 'KHR_materials_sheen', 'KHR_materials_transmission'].includes(ext),
+      false,
+      `Disallowed GLB extension ${ext}`
+    );
+  }
+
+  const weaponRootNode = (gltf.nodes ?? []).find((n) => n.name === 'WeaponRoot');
+  assert.ok(weaponRootNode?.extras, 'WeaponRoot must carry glTF extras');
+  const handBoneRotations = weaponRootNode.extras.hand_bone_rotations as {
+    mixamo_prefix: string;
+    rotation_order: string;
+    right_wrist: { rotation: number[]; rotation_deg: number[]; quaternion: number[] };
+    left_wrist: { rotation: number[]; rotation_deg: number[]; quaternion: number[] };
+    bones: Record<string, { rotation: number[]; rotation_deg: number[]; quaternion: number[] }>;
+  };
+  assert.equal(handBoneRotations.mixamo_prefix, 'mixamorig1_');
+  assert.equal(handBoneRotations.rotation_order, 'XYZ');
+  assert.equal(Object.keys(handBoneRotations.bones).length, 42);
+  assert.equal(handBoneRotations.right_wrist.rotation_deg.length, 3);
+  assert.equal(handBoneRotations.left_wrist.rotation_deg.length, 3);
+
+  const gripRNode = (gltf.nodes ?? []).find((n) => n.name === 'Socket_Grip_Right');
+  const gripLNode = (gltf.nodes ?? []).find((n) => n.name === 'Socket_Grip_Left');
+  const shoulderNode = (gltf.nodes ?? []).find((n) => n.name === 'Socket_Shoulder');
+  assert.ok(gripRNode?.extras?.wrist_rotation_deg, 'Socket_Grip_Right node must embed wrist rotation');
+  assert.equal(Object.keys((gripRNode.extras.bones as Record<string, unknown>) ?? {}).length, 21);
+  assert.ok(gripLNode?.extras?.wrist_rotation_deg, 'Socket_Grip_Left node must embed wrist rotation');
+  assert.equal(Object.keys((gripLNode.extras.bones as Record<string, unknown>) ?? {}).length, 21);
+  assert.ok(shoulderNode?.extras?.position, 'Socket_Shoulder node must embed position in extras');
 });
 

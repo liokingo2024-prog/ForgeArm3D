@@ -424,6 +424,52 @@ export interface WeaponRigDebugExport {
   >;
 }
 
+export interface GlbHandBoneRotationEntry {
+  name: string;
+  mixamo_name: string;
+  parent: string;
+  hand: HandSide;
+  finger: HandFingerName;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  rotation_deg: [number, number, number];
+  quaternion: [number, number, number, number];
+  world_rotation: [number, number, number];
+  world_rotation_deg: [number, number, number];
+  world_quaternion: [number, number, number, number];
+}
+
+export interface GlbHandBoneRotationsPayload {
+  naming_convention: 'mixamo';
+  mixamo_prefix: 'mixamorig1_';
+  finger_axis: '+Y';
+  bone_longitudinal_axis: '+Y';
+  rotation_order: 'XYZ';
+  rotation_units: {
+    rotation: 'radians';
+    rotation_deg: 'degrees';
+  };
+  right_wrist: {
+    bone: 'mixamorig1_RightHand';
+    parent: 'mixamorig1_RightForeArm';
+    rotation: [number, number, number];
+    rotation_deg: [number, number, number];
+    quaternion: [number, number, number, number];
+  };
+  left_wrist: {
+    bone: 'mixamorig1_LeftHand';
+    parent: 'mixamorig1_LeftForeArm';
+    rotation: [number, number, number];
+    rotation_deg: [number, number, number];
+    quaternion: [number, number, number, number];
+  };
+  bones: Record<string, GlbHandBoneRotationEntry>;
+}
+
+export interface GlbWeaponExtras extends GodotWeaponMetadata {
+  hand_bone_rotations: GlbHandBoneRotationsPayload;
+}
+
 export interface ViewportTelemetry {
   triangles: number;
   partCount: number;

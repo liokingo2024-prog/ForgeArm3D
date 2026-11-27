@@ -21,7 +21,11 @@ import {
   quantizeExportWear,
   recompressGlbJpegs,
 } from '../utils/glbOptimizer';
-import { buildGodotWeaponMetadata } from '../utils/godotExporter';
+import {
+  buildGlbEmbeddedExtras,
+  buildGlbSocketExtrasMap,
+  buildGodotWeaponMetadata,
+} from '../utils/godotExporter';
 import { MIXAMO_BONE_PREFIX, MIXAMO_FINGERS } from '../utils/handRig';
 import { getGlbExportSpec, resolveMechanicalConstraints } from '../utils/weaponLogic';
 import {
@@ -1808,11 +1812,27 @@ export class WeaponEngine {
         }
       });
 
-      // Embed complete JSON-serializable Godot 4.7.2 metadata into glTF extras on WeaponRoot AND primary mesh
-      const extrasPayload = JSON.parse(JSON.stringify(metadata));
-      exportRoot.userData = { ...extrasPayload };
+      // Embed complete Godot 4.7.2 metadata + hand bone rotations into glTF extras on WeaponRoot, primary mesh, and Socket_* nodes
+      const glbExtras = buildGlbEmbeddedExtras(
+        metadata,
+        this.currentConfig,
+        this.currentMechanics
+      );
+      exportRoot.userData = { ...glbExtras };
       if (primaryMesh) {
-        (primaryMesh as THREE.Mesh).userData = { ...extrasPayload };
+        (primaryMesh as THREE.Mesh).userData = { ...glbExtras };
+      }
+
+      const socketExtrasMap = buildGlbSocketExtrasMap(
+        metadata,
+        this.currentConfig,
+        this.currentMechanics
+      );
+      for (const [socketName, socketExtras] of Object.entries(socketExtrasMap)) {
+        const socketNode = exportRoot.getObjectByName(socketName);
+        if (socketNode) {
+          socketNode.userData = socketExtras;
+        }
       }
 
       const exporter = new GLTFExporter();

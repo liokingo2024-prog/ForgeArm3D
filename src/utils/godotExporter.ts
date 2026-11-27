@@ -1,5 +1,8 @@
 import {
   GlbExportQuality,
+  GlbHandBoneRotationEntry,
+  GlbHandBoneRotationsPayload,
+  GlbWeaponExtras,
   GodotFireMode,
   GodotSocketRole,
   GodotSocketTransform,
@@ -840,6 +843,133 @@ export function buildWeaponRigDebugJson(
   };
 }
 
+/**
+ * Builds the Mixamo hand bone rotation payload embedded directly inside the exported .glb
+ * (WeaponRoot extras, primary mesh extras, and Socket_Grip_* node extras) without adding Bone nodes.
+ */
+export function buildGlbHandBoneRotationsPayload(
+  config: WeaponConfig,
+  mechanics: ResolvedMechanics
+): GlbHandBoneRotationsPayload {
+  const spec = resolveMixamoHandRig(config, mechanics);
+  const bones: Record<string, GlbHandBoneRotationEntry> = {};
+  for (const [boneName, bone] of Object.entries(spec.bones)) {
+    bones[boneName] = {
+      name: bone.name,
+      mixamo_name: bone.mixamo_name,
+      parent: bone.parent,
+      hand: bone.hand,
+      finger: bone.finger,
+      position: bone.position,
+      rotation: bone.rotation,
+      rotation_deg: bone.rotation_deg,
+      quaternion: bone.quaternion,
+      world_rotation: bone.world_rotation,
+      world_rotation_deg: bone.world_rotation_deg,
+      world_quaternion: bone.world_quaternion,
+    };
+  }
+  const rWrist = bones.RightHand;
+  const lWrist = bones.LeftHand;
+  return {
+    naming_convention: spec.naming_convention,
+    mixamo_prefix: spec.mixamo_prefix,
+    finger_axis: spec.finger_axis,
+    bone_longitudinal_axis: spec.bone_longitudinal_axis,
+    rotation_order: 'XYZ',
+    rotation_units: {
+      rotation: 'radians',
+      rotation_deg: 'degrees',
+    },
+    right_wrist: {
+      bone: 'mixamorig1_RightHand',
+      parent: 'mixamorig1_RightForeArm',
+      rotation: rWrist.rotation,
+      rotation_deg: rWrist.rotation_deg,
+      quaternion: rWrist.quaternion,
+    },
+    left_wrist: {
+      bone: 'mixamorig1_LeftHand',
+      parent: 'mixamorig1_LeftForeArm',
+      rotation: lWrist.rotation,
+      rotation_deg: lWrist.rotation_deg,
+      quaternion: lWrist.quaternion,
+    },
+    bones,
+  };
+}
+
+/**
+ * Builds the complete glTF extras payload embedded on WeaponRoot and primary mesh inside the .glb.
+ */
+export function buildGlbEmbeddedExtras(
+  metadata: GodotWeaponMetadata,
+  config: WeaponConfig,
+  mechanics: ResolvedMechanics
+): GlbWeaponExtras {
+  return {
+    ...JSON.parse(JSON.stringify(metadata)),
+    hand_bone_rotations: buildGlbHandBoneRotationsPayload(config, mechanics),
+  };
+}
+
+/**
+ * Builds per-socket glTF extras attached directly to Socket_* nodes inside the .glb.
+ */
+export function buildGlbSocketExtrasMap(
+  metadata: GodotWeaponMetadata,
+  config: WeaponConfig,
+  mechanics: ResolvedMechanics
+): Record<string, Record<string, unknown>> {
+  const handRotations = buildGlbHandBoneRotationsPayload(config, mechanics);
+  const spec = resolveMixamoHandRig(config, mechanics);
+  const filterSide = (hand: 'right' | 'left') => {
+    const out: Record<string, GlbHandBoneRotationEntry> = {};
+    for (const [k, v] of Object.entries(handRotations.bones)) {
+      if (v.hand === hand) out[k] = v;
+    }
+    return out;
+  };
+
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [socketName, socketSpec] of Object.entries(metadata.sockets)) {
+    if (socketName === 'Socket_Grip_Right') {
+      out[socketName] = {
+        ...socketSpec,
+        socket_semantics: metadata.socket_semantics,
+        is_joint: metadata.is_joint,
+        mixamo_prefix: handRotations.mixamo_prefix,
+        finger_axis: handRotations.finger_axis,
+        rotation_order: handRotations.rotation_order,
+        wrist_bone: handRotations.right_wrist.bone,
+        wrist_rotation: handRotations.right_wrist.rotation,
+        wrist_rotation_deg: handRotations.right_wrist.rotation_deg,
+        wrist_quaternion: handRotations.right_wrist.quaternion,
+        bones: filterSide('right'),
+      };
+    } else if (socketName === 'Socket_Grip_Left') {
+      out[socketName] = {
+        ...socketSpec,
+        socket_semantics: metadata.socket_semantics,
+        is_joint: metadata.is_joint,
+        mixamo_prefix: handRotations.mixamo_prefix,
+        finger_axis: handRotations.finger_axis,
+        rotation_order: handRotations.rotation_order,
+        left_grip_style: spec.left_grip_style,
+        left_grip_placement: spec.left_grip_placement,
+        wrist_bone: handRotations.left_wrist.bone,
+        wrist_rotation: handRotations.left_wrist.rotation,
+        wrist_rotation_deg: handRotations.left_wrist.rotation_deg,
+        wrist_quaternion: handRotations.left_wrist.quaternion,
+        bones: filterSide('left'),
+      };
+    } else {
+      out[socketName] = { ...socketSpec };
+    }
+  }
+  return out;
+}
+
 export interface ManifestSelfCheckItem {
   id: number;
   label: string;
@@ -1315,6 +1445,15 @@ func get_ads_offset() -> Vector3:
 \tif socket_ads == null:
 \t\treturn Vector3.ZERO
 \treturn -socket_ads.position
+
+## Reads the hand bone rotation dictionary embedded directly in the imported GLB extras.
+func get_embedded_hand_bone_rotations() -> Dictionary:
+\tif model == null or not model.has_meta("extras"):
+\t\treturn {}
+\tvar extras: Variant = model.get_meta("extras")
+\tif extras is Dictionary:
+\t\treturn (extras as Dictionary).get("hand_bone_rotations", {})
+\treturn {}
 `;
 }
 

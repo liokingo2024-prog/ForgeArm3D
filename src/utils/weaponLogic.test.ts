@@ -37,6 +37,9 @@ import {
   replaceGlbBufferViews,
 } from './glbOptimizer';
 import {
+  buildGlbEmbeddedExtras,
+  buildGlbHandBoneRotationsPayload,
+  buildGlbSocketExtrasMap,
   buildGodotBundleFilename,
   buildGodotSocketsMap,
   buildGodotWeaponMetadata,
@@ -704,6 +707,28 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
     const qWorldStored = new THREE.Quaternion(...b.world_quaternion).normalize();
     assert.ok(Math.abs(qWorldEuler.dot(qWorldStored)) > 0.9999, `${b.name} world Euler/quaternion mismatch`);
   }
+
+  // Verify GLB embedded extras payload & per-socket extras contain full hand bone rotations cleanly
+  const glbRotPayload = buildGlbHandBoneRotationsPayload(cfg, m);
+  assert.equal(glbRotPayload.mixamo_prefix, 'mixamorig1_');
+  assert.equal(glbRotPayload.finger_axis, '+Y');
+  assert.equal(glbRotPayload.rotation_order, 'XYZ');
+  assert.equal(Object.keys(glbRotPayload.bones).length, 42);
+  assert.equal(glbRotPayload.right_wrist.bone, 'mixamorig1_RightHand');
+  assert.equal(glbRotPayload.left_wrist.bone, 'mixamorig1_LeftHand');
+
+  const meta = buildGodotWeaponMetadata(cfg, m, [0.064, 0.285, 0.92]);
+  const glbExtras = buildGlbEmbeddedExtras(meta, cfg, m);
+  assert.equal(glbExtras.weapon_id, 'ak_47_classic');
+  assert.equal(Object.keys(glbExtras.hand_bone_rotations.bones).length, 42);
+  assert.equal(JSON.stringify(glbExtras).includes('mixamorig:'), false);
+  assert.equal(JSON.stringify(glbExtras).includes('HandRig_'), false);
+
+  const socketExtras = buildGlbSocketExtrasMap(meta, cfg, m);
+  assert.equal(Object.keys((socketExtras.Socket_Grip_Right as { bones: Record<string, unknown> }).bones).length, 21);
+  assert.equal(Object.keys((socketExtras.Socket_Grip_Left as { bones: Record<string, unknown> }).bones).length, 21);
+  assert.ok((socketExtras.Socket_Grip_Right as { wrist_rotation_deg: number[] }).wrist_rotation_deg.length === 3);
+  assert.ok((socketExtras.Socket_Grip_Left as { wrist_rotation_deg: number[] }).wrist_rotation_deg.length === 3);
 });
 
 test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scene, typed GDScript, and CRC-verified zip', () => {
@@ -737,6 +762,7 @@ test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scen
   assert.match(gd, /MIXAMO_PREFIX := "mixamorig1_"/);
   assert.match(gd, /palm_centre = wrist \+ hand_bone_\+Y \* wrist_to_palm_distance/);
   assert.match(gd, /static func solve_hand_basis\(hand_x_axis: Vector3, hand_y_axis: Vector3\) -> Basis/);
+  assert.match(gd, /func get_embedded_hand_bone_rotations\(\) -> Dictionary/);
   assert.match(gd, /find_child\("Socket_Shoulder", true, false\)/);
   assert.equal(gd.includes('mixamorig:'), false);
   assert.equal(gd.includes('runtime_outward_along_contact_normal'), false);
