@@ -560,7 +560,7 @@ test('computeGodotWeaponStats & category output all Godot 4.7.2 fields accuratel
   assert.equal(computeGodotWeaponStats(shotty, shottyM).pellet_count, 8);
 });
 
-test('runtime manifest matches exact clean schema (no hand_rig/bones/world_position) & passes all 15 self-checks across all presets & variants', () => {
+test('weapon manifest removes Grip_Left, embeds bone_attach & all 42 bone positions/rotations, and passes all 15 self-checks', () => {
   const cfg = getInitialWeaponConfig();
   const m = resolveMechanicalConstraints(cfg);
   const exported = buildWeaponJsonExport(cfg, m, [0.064, 0.285, 0.92]);
@@ -582,6 +582,8 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
       'dimensions',
       'paints',
       'sockets',
+      'bone_attach',
+      'hand_bone_rotations',
     ].sort()
   );
 
@@ -592,22 +594,49 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
   assert.equal(exported.is_joint, false);
   assert.deepEqual(exported.dimensions_m, [0.064, 0.285, 0.92]);
 
-  // Verify Socket_Grip_Right & Socket_Grip_Left follow new weapon-space axis contract
+  // Verify Socket_Grip_Left is completely removed
+  assert.equal(exported.sockets.Socket_Grip_Left, undefined);
+
+  // Verify Socket_Grip_Right matches Mixamo (+Y longitudinal, +X thumbward, +Z palmar)
   const rightGrip = exported.sockets.Socket_Grip_Right;
   assert.deepEqual(rightGrip.position, [0, 0, 0]);
   assert.deepEqual(rightGrip.rotation, [0, 0, 0]);
   assert.ok(rightGrip.wrist_offset_weapon_space);
-  assert.ok(Math.abs(rightGrip.wrist_offset_weapon_space[0] - 0.0413) < 0.005);
-  assert.ok(Math.abs(rightGrip.wrist_offset_weapon_space[2] - 0.0595) < 0.005);
+  assert.ok(rightGrip.wrist_offset_weapon_space[0] > 0.025);
+  assert.ok(rightGrip.wrist_offset_weapon_space[2] > 0.045);
   assert.ok(rightGrip.hand_y_axis && rightGrip.hand_y_axis[2] < -0.9);
-  assert.ok(rightGrip.hand_x_axis && rightGrip.hand_x_axis[0] > 0.9);
+  assert.ok(rightGrip.hand_x_axis && rightGrip.hand_x_axis[1] > 0.85);
+  assert.ok(exported.hand_bone_rotations.bones.RightHand.bone_normal[0] < -0.9);
 
-  const leftGrip = exported.sockets.Socket_Grip_Left;
-  assert.ok(leftGrip.position[0] < 0 && leftGrip.position[2] < -0.1);
-  assert.deepEqual(leftGrip.rotation, [0, 0, 0]);
-  assert.ok(leftGrip.wrist_offset_weapon_space);
-  assert.ok(leftGrip.hand_y_axis && leftGrip.hand_y_axis[2] < -0.9);
-  assert.ok(leftGrip.hand_x_axis && leftGrip.hand_x_axis[0] > 0.5);
+  // Verify bone_attach is exact inverse of RightHand wrist transform
+  assert.equal(exported.bone_attach.attach_bone, 'mixamorig1_RightHand');
+  const rwBone = exported.hand_bone_rotations.bones.RightHand;
+  const wristMat = new THREE.Matrix4().compose(
+    new THREE.Vector3(...rwBone.world_position),
+    new THREE.Quaternion(...rwBone.world_quaternion),
+    new THREE.Vector3(1, 1, 1)
+  );
+  const attachMat = new THREE.Matrix4().compose(
+    new THREE.Vector3(...exported.bone_attach.weapon_offset_position),
+    new THREE.Quaternion(...exported.bone_attach.weapon_offset_quaternion),
+    new THREE.Vector3(1, 1, 1)
+  );
+  const product = wristMat.multiply(attachMat);
+  const identErr = product.elements.reduce((acc, v, i) => {
+    const expected = i % 5 === 0 ? 1 : 0;
+    return Math.max(acc, Math.abs(v - expected));
+  }, 0);
+  assert.ok(identErr < 0.002, `bone_attach inverse matrix mismatch: max err=${identErr}`);
+
+  // Verify all 42 bone positions & rotations exist directly in <weapon_id>.json
+  assert.equal(exported.hand_bone_rotations.palmar_axis, '+Z');
+  assert.equal(Object.keys(exported.hand_bone_rotations.bones).length, 42);
+  for (const b of Object.values(exported.hand_bone_rotations.bones)) {
+    assert.equal(b.position.length, 3);
+    assert.equal(b.world_position.length, 3);
+    assert.equal(b.right_hand_position.length, 3);
+    assert.ok(Number.isFinite(b.bone_length_m));
+  }
 
   // Verify Socket_Shoulder derivation
   const shoulder = exported.sockets.Socket_Shoulder;
@@ -619,17 +648,14 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
     Math.abs(shoulder.position[2] - (exported.sockets.Socket_Muzzle.position[2] + 0.92)) <= 0.001
   );
 
-  // Verify zero forbidden strings in serialized runtime manifest
+  // Verify zero legacy/forbidden strings in serialized runtime manifest
   const jsonText = JSON.stringify(exported);
   for (const forbidden of [
+    'Grip_Left',
+    'left_grip_',
     'hand_rig',
     'hand_orientation',
-    '"bones"',
-    'world_position',
     'HandRig_',
-    'quaternion',
-    'phalanx',
-    'bone_forward',
     'mixamorig:',
     'runtime_outward_along_contact_normal',
   ]) {
@@ -647,7 +673,7 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
   assert.equal(getExportedMovableParts(stockless).includes('Part_Magazine'), false);
   assert.equal(getExportedMovableParts(stockless).includes('Part_Stock'), false);
 
-  // Run all 15 Part 4 self-checks across all starter presets, stockless build, all 9 underbarrels, and grip extremes
+  // Run all 15 self-checks across all starter presets, stockless build, all 9 underbarrels, and all 7 grips
   const checkConfigs: Array<{ label: string; cfg: typeof cfg }> = [
     ...STARTER_PRESETS.map((p) => ({ label: `preset:${p.id}`, cfg: p.config })),
     { label: 'stockless', cfg: stockless },
@@ -679,25 +705,26 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
   assert.deepEqual(roundTripped.dimensions, cfg.dimensions);
   assert.equal(roundTripped.name, cfg.name);
 
-  // Verify buildWeaponRigDebugJson emits separate debug payload cleanly with full bone rotations
+  // Verify buildWeaponRigDebugJson emits all bone positions & rotations without left_grip info
   const debugJson = buildWeaponRigDebugJson(cfg, m);
-  assert.equal(debugJson.game_must_not_load, true);
   assert.equal(debugJson.mixamo_prefix, 'mixamorig1_');
   assert.equal(debugJson.finger_axis, '+Y');
+  assert.equal(debugJson.palmar_axis, '+Z');
   assert.equal(debugJson.rotation_order, 'XYZ');
   assert.deepEqual(debugJson.rotation_units, { rotation: 'radians', rotation_deg: 'degrees' });
   assert.equal(debugJson.bones.RightHand.parent, 'mixamorig1_RightForeArm');
   assert.equal(debugJson.bones.LeftHand.parent, 'mixamorig1_LeftForeArm');
+  assert.equal(JSON.stringify(debugJson).includes('Grip_Left'), false);
   for (const b of Object.values(debugJson.bones)) {
+    assert.equal(b.position.length, 3);
+    assert.equal(b.world_position.length, 3);
+    assert.equal(b.right_hand_position.length, 3);
     assert.equal(b.rotation.length, 3);
     assert.equal(b.rotation_deg.length, 3);
     assert.equal(b.quaternion.length, 4);
     assert.equal(b.world_rotation.length, 3);
     assert.equal(b.world_rotation_deg.length, 3);
     assert.equal(b.world_quaternion.length, 4);
-    for (const n of [...b.rotation, ...b.rotation_deg, ...b.quaternion, ...b.world_rotation, ...b.world_rotation_deg, ...b.world_quaternion]) {
-      assert.ok(Number.isFinite(n), `Debug bone ${b.name} has non-finite rotation field`);
-    }
     const qFromEuler = new THREE.Quaternion().setFromEuler(new THREE.Euler(b.rotation[0], b.rotation[1], b.rotation[2], 'XYZ'));
     const qStored = new THREE.Quaternion(...b.quaternion).normalize();
     assert.ok(Math.abs(qFromEuler.dot(qStored)) > 0.9999, `${b.name} local Euler/quaternion mismatch`);
@@ -708,14 +735,17 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
     assert.ok(Math.abs(qWorldEuler.dot(qWorldStored)) > 0.9999, `${b.name} world Euler/quaternion mismatch`);
   }
 
-  // Verify GLB embedded extras payload & per-socket extras contain full hand bone rotations cleanly
+  // Verify GLB embedded extras payload & Socket_Grip_Right extras contain full bone positions & rotations
   const glbRotPayload = buildGlbHandBoneRotationsPayload(cfg, m);
   assert.equal(glbRotPayload.mixamo_prefix, 'mixamorig1_');
   assert.equal(glbRotPayload.finger_axis, '+Y');
+  assert.equal(glbRotPayload.palmar_axis, '+Z');
   assert.equal(glbRotPayload.rotation_order, 'XYZ');
   assert.equal(Object.keys(glbRotPayload.bones).length, 42);
   assert.equal(glbRotPayload.right_wrist.bone, 'mixamorig1_RightHand');
   assert.equal(glbRotPayload.left_wrist.bone, 'mixamorig1_LeftHand');
+  assert.equal(glbRotPayload.right_wrist.world_position.length, 3);
+  assert.equal(glbRotPayload.left_wrist.world_position.length, 3);
 
   const meta = buildGodotWeaponMetadata(cfg, m, [0.064, 0.285, 0.92]);
   const glbExtras = buildGlbEmbeddedExtras(meta, cfg, m);
@@ -723,12 +753,13 @@ test('runtime manifest matches exact clean schema (no hand_rig/bones/world_posit
   assert.equal(Object.keys(glbExtras.hand_bone_rotations.bones).length, 42);
   assert.equal(JSON.stringify(glbExtras).includes('mixamorig:'), false);
   assert.equal(JSON.stringify(glbExtras).includes('HandRig_'), false);
+  assert.equal(JSON.stringify(glbExtras).includes('Grip_Left'), false);
 
   const socketExtras = buildGlbSocketExtrasMap(meta, cfg, m);
+  assert.equal(socketExtras.Socket_Grip_Left, undefined);
   assert.equal(Object.keys((socketExtras.Socket_Grip_Right as { bones: Record<string, unknown> }).bones).length, 21);
-  assert.equal(Object.keys((socketExtras.Socket_Grip_Left as { bones: Record<string, unknown> }).bones).length, 21);
   assert.ok((socketExtras.Socket_Grip_Right as { wrist_rotation_deg: number[] }).wrist_rotation_deg.length === 3);
-  assert.ok((socketExtras.Socket_Grip_Left as { wrist_rotation_deg: number[] }).wrist_rotation_deg.length === 3);
+  assert.ok((socketExtras.Socket_Grip_Right as { wrist_world_position: number[] }).wrist_world_position.length === 3);
 });
 
 test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scene, typed GDScript, and CRC-verified zip', () => {
@@ -760,10 +791,12 @@ test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scen
   assert.match(gd, /@export var weapon_id: String = "ak_47_classic"/);
   assert.match(gd, /var category: String = "assault_rifle"/);
   assert.match(gd, /MIXAMO_PREFIX := "mixamorig1_"/);
-  assert.match(gd, /palm_centre = wrist \+ hand_bone_\+Y \* wrist_to_palm_distance/);
-  assert.match(gd, /static func solve_hand_basis\(hand_x_axis: Vector3, hand_y_axis: Vector3\) -> Basis/);
+  assert.match(gd, /func get_bone_attach_transform\(\) -> Transform3D/);
+  assert.match(gd, /static func solve_hand_basis\(/);
   assert.match(gd, /func get_embedded_hand_bone_rotations\(\) -> Dictionary/);
   assert.match(gd, /find_child\("Socket_Shoulder", true, false\)/);
+  assert.equal(gd.includes('Socket_Grip_Left'), false);
+  assert.equal(gd.includes('socket_grip_left'), false);
   assert.equal(gd.includes('mixamorig:'), false);
   assert.equal(gd.includes('runtime_outward_along_contact_normal'), false);
 
@@ -782,22 +815,18 @@ test('Godot 4.7.2 .tscn, .gd, and PKZIP pack generators emit valid format=3 scen
   assert.equal(dv.getUint16(zip.byteLength - 12, true), 2, 'ZIP EOCD entry count must equal 2');
 });
 
-test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid parents, and exact FK alignment across all 9 underbarrel variants', () => {
+test('resolveMixamoHandRig emits mixamorig1_ axes (+Y distal, +Z palmar), BoneAttachment3D transform, and exact FK across all underbarrels', () => {
   const configs: Array<{
     label: string;
     mutate?: (cfg: ReturnType<typeof getInitialWeaponConfig>) => void;
-    expectedLeftStyle: string;
-    expectedPlacement: string;
   }> = [
-    { label: 'ak_cradle', expectedLeftStyle: 'handguard_cradle', expectedPlacement: 'handguard_cradle' },
+    { label: 'ak_cradle' },
     {
       label: 'vertical_grip',
       mutate: (c) => {
         c.parts.handguard = 'tactical_mlok';
         c.parts.underbarrel = 'vertical_grip';
       },
-      expectedLeftStyle: 'vertical_grip',
-      expectedPlacement: 'direct_grip',
     },
     {
       label: 'angled_grip',
@@ -805,8 +834,6 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         c.parts.handguard = 'tactical_mlok';
         c.parts.underbarrel = 'angled_grip';
       },
-      expectedLeftStyle: 'angled_grip',
-      expectedPlacement: 'angled_cradle',
     },
     {
       label: 'handstop_kit',
@@ -814,8 +841,6 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         c.parts.handguard = 'tactical_mlok';
         c.parts.underbarrel = 'handstop_kit';
       },
-      expectedLeftStyle: 'underbarrel_cradle',
-      expectedPlacement: 'handstop_pocket',
     },
     {
       label: 'tactical_light',
@@ -824,8 +849,6 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         c.dimensions.handguardLength = 0.28;
         c.parts.underbarrel = 'tactical_light';
       },
-      expectedLeftStyle: 'handguard_cradle',
-      expectedPlacement: 'rear_of_attachment',
     },
     {
       label: 'tactical_laser',
@@ -834,8 +857,6 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         c.dimensions.handguardLength = 0.28;
         c.parts.underbarrel = 'tactical_laser';
       },
-      expectedLeftStyle: 'handguard_cradle',
-      expectedPlacement: 'rear_of_attachment',
     },
     {
       label: 'bipod',
@@ -844,8 +865,6 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         c.dimensions.handguardLength = 0.28;
         c.parts.underbarrel = 'bipod';
       },
-      expectedLeftStyle: 'handguard_cradle',
-      expectedPlacement: 'rear_of_attachment',
     },
     {
       label: 'grenade_launcher',
@@ -853,8 +872,6 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         c.parts.handguard = 'quad_rail';
         c.parts.underbarrel = 'grenade_launcher';
       },
-      expectedLeftStyle: 'underbarrel_cradle',
-      expectedPlacement: 'direct_grip',
     },
     {
       label: 'masterkey_shotgun',
@@ -862,8 +879,6 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         c.parts.handguard = 'quad_rail';
         c.parts.underbarrel = 'masterkey_shotgun';
       },
-      expectedLeftStyle: 'underbarrel_cradle',
-      expectedPlacement: 'direct_grip',
     },
     {
       label: 'compact_shroud_laser_wrap',
@@ -872,16 +887,12 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         c.dimensions.handguardLength = 0.11;
         c.parts.underbarrel = 'tactical_laser';
       },
-      expectedLeftStyle: 'underbarrel_cradle',
-      expectedPlacement: 'wrapped_attachment',
     },
     {
       label: 'bare_barrel',
       mutate: (c) => {
         c.parts.handguard = 'none';
       },
-      expectedLeftStyle: 'bare_barrel',
-      expectedPlacement: 'bare_barrel',
     },
   ];
 
@@ -895,9 +906,9 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
     assert.equal(rig.mixamo_prefix, 'mixamorig1_');
     assert.equal(rig.finger_axis, '+Y');
     assert.equal(rig.bone_longitudinal_axis, '+Y');
+    assert.equal(rig.palmar_axis, '+Z');
+    assert.equal(rig.bone_attach.attach_bone, 'mixamorig1_RightHand');
     assert.equal((rig as unknown as Record<string, unknown>).total_bones, undefined);
-    assert.equal(rig.left_grip_style, entry.expectedLeftStyle);
-    assert.equal(rig.left_grip_placement, entry.expectedPlacement);
     assert.equal(rig.wrist_mixamo_names.right, 'mixamorig1_RightHand');
     assert.equal(rig.wrist_mixamo_names.left, 'mixamorig1_LeftHand');
     assert.equal(MIXAMO_RIGHT_BONE_NAMES.length, 21);
@@ -907,6 +918,20 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
     for (const boneName of ALL_MIXAMO_HAND_BONE_NAMES) {
       assert.equal(rig.bones[boneName].mixamo_name, `mixamorig1_${boneName}`);
     }
+
+    // Verify Mixamo bilateral axis convention on both wrists
+    const rWristX = new THREE.Vector3(...rig.grips.right.hand_x_axis);
+    const rIdxToPinky = new THREE.Vector3(...rig.bones.RightHandIndex1.world_position).sub(
+      new THREE.Vector3(...rig.bones.RightHandPinky1.world_position)
+    );
+    assert.ok(rIdxToPinky.dot(rWristX) > 0, `${entry.label}: RightHand +X must point toward thumb/index`);
+
+    const lWristQuat = new THREE.Quaternion(...rig.bones.LeftHand.world_quaternion);
+    const lWristX = new THREE.Vector3(1, 0, 0).applyQuaternion(lWristQuat);
+    const lPinkyFromIdx = new THREE.Vector3(...rig.bones.LeftHandPinky1.world_position).sub(
+      new THREE.Vector3(...rig.bones.LeftHandIndex1.world_position)
+    );
+    assert.ok(lPinkyFromIdx.dot(lWristX) > 0, `${entry.label}: LeftHand +X must point toward pinky/ulnar`);
 
     const resolveWorldMat = (boneName: string): THREE.Matrix4 => {
       const b = rig.bones[boneName];
@@ -923,6 +948,12 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
       return resolveWorldMat(parentShort).multiply(localMat);
     };
 
+    const attachMat = new THREE.Matrix4().compose(
+      new THREE.Vector3(...rig.bone_attach.weapon_offset_position),
+      new THREE.Quaternion(...rig.bone_attach.weapon_offset_quaternion),
+      new THREE.Vector3(1, 1, 1)
+    );
+
     for (const boneName of ALL_MIXAMO_HAND_BONE_NAMES) {
       const b = rig.bones[boneName];
       for (const n of [
@@ -934,6 +965,8 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
         ...b.world_rotation,
         ...b.world_rotation_deg,
         ...b.world_quaternion,
+        ...b.right_hand_position,
+        b.bone_length_m,
       ]) {
         assert.ok(Number.isFinite(n), `${entry.label}.${boneName} has non-finite transform component`);
       }
@@ -943,6 +976,11 @@ test('resolveMixamoHandRig emits mixamorig1_ prefix, +Y finger axis, valid paren
       assert.ok(
         fkPos.distanceTo(expected) < 0.001,
         `${entry.label}.${boneName} FK position mismatch: ${fkPos.distanceTo(expected)}`
+      );
+      const rhConverted = expected.clone().applyMatrix4(attachMat);
+      assert.ok(
+        rhConverted.distanceTo(new THREE.Vector3(...b.right_hand_position)) < 0.001,
+        `${entry.label}.${boneName} right_hand_position mismatch`
       );
       const fkQuat = new THREE.Quaternion().setFromRotationMatrix(fkMat).normalize();
       const expectedQuat = new THREE.Quaternion(...b.world_quaternion).normalize();

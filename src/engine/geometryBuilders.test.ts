@@ -263,7 +263,6 @@ test('buildWeaponSceneGraph exposes standardized Godot 4.7.2 empty sockets and a
   for (const requiredSocket of [
     'Socket_Muzzle',
     'Socket_Grip_Right',
-    'Socket_Grip_Left',
     'Socket_Shoulder',
     'Socket_ADS',
     'Socket_Eject',
@@ -276,6 +275,7 @@ test('buildWeaponSceneGraph exposes standardized Godot 4.7.2 empty sockets and a
     assert.equal(node.children.length, 0, `${requiredSocket} must be an empty Object3D marker`);
     assert.equal((node as THREE.Mesh).isMesh, undefined, `${requiredSocket} must not be a Mesh`);
   }
+  assert.equal(rig.root.getObjectByName('Socket_Grip_Left'), undefined, 'Socket_Grip_Left must be removed');
 
   // Removing handguard omits Socket_Underbarrel; removing stock omits Socket_Shoulder
   const noHgCfg = cloneWeaponConfig(cfg);
@@ -300,7 +300,7 @@ test('buildWeaponSceneGraph exposes standardized Godot 4.7.2 empty sockets and a
   );
 });
 
-test('Socket_Grip_Right sits at grip centerline pivot and Socket_Grip_Left sits on exterior -X surface', () => {
+test('Socket_Grip_Right sits at grip centerline pivot and right palm contact sits flush on exterior pistol grip', () => {
   const mats = createTestMaterials();
   const raycaster = new THREE.Raycaster();
 
@@ -337,46 +337,6 @@ test('Socket_Grip_Right sits at grip centerline pivot and Socket_Grip_Left sits 
       rig.slotGroups.grip,
       new THREE.Vector3(m.rightGripSurfaceHalfW, m.gripPivotPos.y, m.gripPivotPos.z),
       m.socketHandRNormal
-    );
-  }
-
-  // All 8 handguard variants (bare handguard cradle)
-  for (const hg of SLOT_SPECS.handguard.variants) {
-    const cfg = cloneWeaponConfig(STARTER_PRESETS[0].config);
-    cfg.parts.handguard = hg.id as typeof cfg.parts.handguard;
-    cfg.parts.underbarrel = 'none';
-    const m = resolveMechanicalConstraints(cfg);
-    const rig = buildWeaponSceneGraph(cfg, m, mats);
-    rig.root.updateMatrixWorld(true);
-    const targetGrp = hg.id === 'none' ? rig.slotGroups.barrel : rig.slotGroups.handguard;
-    assertSurfaceContact(
-      `handguard.${hg.id}`,
-      targetGrp,
-      rig.socketGripLeft.position,
-      m.socketHandLNormal
-    );
-  }
-
-  // All 9 underbarrel variants
-  for (const ub of SLOT_SPECS.underbarrel.variants) {
-    const cfg = cloneWeaponConfig(STARTER_PRESETS[1].config);
-    cfg.parts.handguard = 'tactical_mlok';
-    cfg.parts.underbarrel = ub.id as typeof cfg.parts.underbarrel;
-    const m = resolveMechanicalConstraints(cfg);
-    const rig = buildWeaponSceneGraph(cfg, m, mats);
-    rig.root.updateMatrixWorld(true);
-    const gripsUnderbarrel =
-      ub.id === 'vertical_grip' ||
-      ub.id === 'angled_grip' ||
-      ub.id === 'grenade_launcher' ||
-      ub.id === 'masterkey_shotgun' ||
-      (ub.id === 'tactical_laser' && m.leftGripPlacement === 'wrapped_attachment');
-    const targetGrp = gripsUnderbarrel ? rig.slotGroups.underbarrel : rig.slotGroups.handguard;
-    assertSurfaceContact(
-      `underbarrel.${ub.id}`,
-      targetGrp,
-      rig.socketGripLeft.position,
-      m.socketHandLNormal
     );
   }
 });
@@ -486,6 +446,10 @@ test('WeaponRoot embeds full Mixamo RightHand & LeftHand bone trees across all 9
             : spec.bones[boneName].parent.replace(/^mixamorig1_/, '');
       assert.equal(bone.parent?.name, expectedParent);
       assert.equal(bone.userData.mixamo_name, `mixamorig1_${boneName}`);
+      assert.deepEqual(bone.userData.position, spec.bones[boneName].position);
+      assert.deepEqual(bone.userData.world_position, spec.bones[boneName].world_position);
+      assert.deepEqual(bone.userData.right_hand_position, spec.bones[boneName].right_hand_position);
+      assert.equal(bone.userData.bone_length_m, spec.bones[boneName].bone_length_m);
       assert.deepEqual(bone.userData.rotation, spec.bones[boneName].rotation);
       assert.deepEqual(bone.userData.rotation_deg, spec.bones[boneName].rotation_deg);
       assert.deepEqual(bone.userData.quaternion, spec.bones[boneName].quaternion);
@@ -671,26 +635,61 @@ test('exported binary GLB embeds metadata and 42 hand bone rotations in WeaponRo
 
   const weaponRootNode = (gltf.nodes ?? []).find((n) => n.name === 'WeaponRoot');
   assert.ok(weaponRootNode?.extras, 'WeaponRoot must carry glTF extras');
+  const boneAttach = weaponRootNode.extras.bone_attach as {
+    attach_bone: string;
+    weapon_offset_position: number[];
+    weapon_offset_quaternion: number[];
+  };
+  assert.equal(boneAttach.attach_bone, 'mixamorig1_RightHand');
+  assert.equal(boneAttach.weapon_offset_position.length, 3);
+  assert.equal(boneAttach.weapon_offset_quaternion.length, 4);
+
   const handBoneRotations = weaponRootNode.extras.hand_bone_rotations as {
     mixamo_prefix: string;
+    palmar_axis: string;
     rotation_order: string;
-    right_wrist: { rotation: number[]; rotation_deg: number[]; quaternion: number[] };
-    left_wrist: { rotation: number[]; rotation_deg: number[]; quaternion: number[] };
-    bones: Record<string, { rotation: number[]; rotation_deg: number[]; quaternion: number[] }>;
+    right_wrist: {
+      position: number[];
+      world_position: number[];
+      rotation: number[];
+      rotation_deg: number[];
+      quaternion: number[];
+    };
+    left_wrist: {
+      position: number[];
+      world_position: number[];
+      rotation: number[];
+      rotation_deg: number[];
+      quaternion: number[];
+    };
+    bones: Record<
+      string,
+      {
+        position: number[];
+        world_position: number[];
+        right_hand_position: number[];
+        bone_length_m: number;
+        rotation: number[];
+        rotation_deg: number[];
+        quaternion: number[];
+      }
+    >;
   };
   assert.equal(handBoneRotations.mixamo_prefix, 'mixamorig1_');
+  assert.equal(handBoneRotations.palmar_axis, '+Z');
   assert.equal(handBoneRotations.rotation_order, 'XYZ');
   assert.equal(Object.keys(handBoneRotations.bones).length, 42);
-  assert.equal(handBoneRotations.right_wrist.rotation_deg.length, 3);
-  assert.equal(handBoneRotations.left_wrist.rotation_deg.length, 3);
+  assert.equal(handBoneRotations.right_wrist.world_position.length, 3);
+  assert.equal(handBoneRotations.left_wrist.world_position.length, 3);
+  assert.equal(handBoneRotations.bones.LeftHandMiddle1.right_hand_position.length, 3);
 
   const gripRNode = (gltf.nodes ?? []).find((n) => n.name === 'Socket_Grip_Right');
   const gripLNode = (gltf.nodes ?? []).find((n) => n.name === 'Socket_Grip_Left');
   const shoulderNode = (gltf.nodes ?? []).find((n) => n.name === 'Socket_Shoulder');
+  assert.equal(gripLNode, undefined, 'Socket_Grip_Left must not exist in exported GLB');
   assert.ok(gripRNode?.extras?.wrist_rotation_deg, 'Socket_Grip_Right node must embed wrist rotation');
+  assert.ok(gripRNode?.extras?.wrist_world_position, 'Socket_Grip_Right node must embed wrist world position');
   assert.equal(Object.keys((gripRNode.extras.bones as Record<string, unknown>) ?? {}).length, 21);
-  assert.ok(gripLNode?.extras?.wrist_rotation_deg, 'Socket_Grip_Left node must embed wrist rotation');
-  assert.equal(Object.keys((gripLNode.extras.bones as Record<string, unknown>) ?? {}).length, 21);
   assert.ok(shoulderNode?.extras?.position, 'Socket_Shoulder node must embed position in extras');
 });
 

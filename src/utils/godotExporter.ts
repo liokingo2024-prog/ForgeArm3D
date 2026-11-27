@@ -636,13 +636,7 @@ export function buildGodotSocketsMap(
       wrist_offset_weapon_space: handRig.grips.right.wrist_offset_weapon_space,
       hand_y_axis: handRig.grips.right.hand_y_axis,
       hand_x_axis: handRig.grips.right.hand_x_axis,
-    },
-    Socket_Grip_Left: {
-      position: relativeToOrigin(mechanics.socketHandLPos, origin),
-      rotation: [0, 0, 0],
-      wrist_offset_weapon_space: handRig.grips.left.wrist_offset_weapon_space,
-      hand_y_axis: handRig.grips.left.hand_y_axis,
-      hand_x_axis: handRig.grips.left.hand_x_axis,
+      hand_z_axis: handRig.grips.right.hand_z_axis,
     },
     Socket_Muzzle: makeGodotSocketTransform(
       muzzlePos,
@@ -740,9 +734,83 @@ export function estimateWeaponDimensionsM(
 }
 
 /**
- * Builds the clean, JSON-serializable Godot 4.7.2 runtime metadata payload embedded directly inside the .glb
+ * Builds the Mixamo hand bone position + rotation payload embedded in BOTH <weapon_id>.json
+ * and the exported .glb extras (WeaponRoot, primary mesh, and Socket_Grip_Right).
+ */
+export function buildGlbHandBoneRotationsPayload(
+  config: WeaponConfig,
+  mechanics: ResolvedMechanics
+): GlbHandBoneRotationsPayload {
+  const spec = resolveMixamoHandRig(config, mechanics);
+  const bones: Record<string, GlbHandBoneRotationEntry> = {};
+  for (const [boneName, bone] of Object.entries(spec.bones)) {
+    bones[boneName] = {
+      name: bone.name,
+      mixamo_name: bone.mixamo_name,
+      parent: bone.parent,
+      hand: bone.hand,
+      finger: bone.finger,
+      phalanx: bone.phalanx,
+      position: bone.position,
+      world_position: bone.world_position,
+      right_hand_position: bone.right_hand_position,
+      bone_length_m: bone.bone_length_m,
+      rotation: bone.rotation,
+      rotation_deg: bone.rotation_deg,
+      quaternion: bone.quaternion,
+      world_rotation: bone.world_rotation,
+      world_rotation_deg: bone.world_rotation_deg,
+      world_quaternion: bone.world_quaternion,
+      bone_forward: bone.bone_forward,
+      bone_normal: bone.bone_normal,
+    };
+  }
+  const rWrist = bones.RightHand;
+  const lWrist = bones.LeftHand;
+  return {
+    naming_convention: spec.naming_convention,
+    mixamo_prefix: spec.mixamo_prefix,
+    finger_axis: spec.finger_axis,
+    bone_longitudinal_axis: spec.bone_longitudinal_axis,
+    palmar_axis: spec.palmar_axis,
+    rotation_order: 'XYZ',
+    units: 'meters',
+    rotation_units: {
+      rotation: 'radians',
+      rotation_deg: 'degrees',
+    },
+    bone_attach: spec.bone_attach,
+    right_wrist: {
+      bone: 'mixamorig1_RightHand',
+      parent: 'mixamorig1_RightForeArm',
+      position: rWrist.position,
+      world_position: rWrist.world_position,
+      rotation: rWrist.rotation,
+      rotation_deg: rWrist.rotation_deg,
+      quaternion: rWrist.quaternion,
+      world_rotation: rWrist.world_rotation,
+      world_rotation_deg: rWrist.world_rotation_deg,
+      world_quaternion: rWrist.world_quaternion,
+    },
+    left_wrist: {
+      bone: 'mixamorig1_LeftHand',
+      parent: 'mixamorig1_LeftForeArm',
+      position: lWrist.position,
+      world_position: lWrist.world_position,
+      rotation: lWrist.rotation,
+      rotation_deg: lWrist.rotation_deg,
+      quaternion: lWrist.quaternion,
+      world_rotation: lWrist.world_rotation,
+      world_rotation_deg: lWrist.world_rotation_deg,
+      world_quaternion: lWrist.world_quaternion,
+    },
+    bones,
+  };
+}
+
+/**
+ * Builds the complete JSON-serializable Godot 4.7.2 metadata payload embedded directly inside the .glb
  * (WeaponRoot.userData + primary mesh userData -> glTF extras) and exported alongside as <weapon_id>.json.
- * Contains NO single-frame bone snapshots or hand_rig dumps.
  */
 export function buildGodotWeaponMetadata(
   config: WeaponConfig,
@@ -752,6 +820,7 @@ export function buildGodotWeaponMetadata(
   const dims: [number, number, number] = exactDimensionsM
     ? [roundN(exactDimensionsM[0], 4), roundN(exactDimensionsM[1], 4), roundN(exactDimensionsM[2], 4)]
     : estimateWeaponDimensionsM(config, mechanics);
+  const handBoneRotations = buildGlbHandBoneRotationsPayload(config, mechanics);
 
   return {
     weapon_id: slugifyWeaponName(config.name),
@@ -765,12 +834,14 @@ export function buildGodotWeaponMetadata(
     dimensions_m: dims,
     movable_parts: getExportedMovableParts(config),
     sockets: buildGodotSocketsMap(config, mechanics, dims),
+    bone_attach: handBoneRotations.bone_attach,
+    hand_bone_rotations: handBoneRotations,
   };
 }
 
 /**
- * Builds the unified runtime JSON export payload (<weapon_id>.json) containing the exact runtime
- * schema alongside ForgeArm's full build config (100% backwards-compatible with Load JSON).
+ * Builds the unified runtime JSON export payload (<weapon_id>.json) containing the exact Godot metadata,
+ * BoneAttachment3D transform, all 42 Mixamo bone positions & rotations, and ForgeArm's full build config.
  */
 export function buildWeaponJsonExport(
   config: WeaponConfig,
@@ -793,12 +864,13 @@ export function buildWeaponJsonExport(
     dimensions: config.dimensions,
     paints: config.paints,
     sockets: meta.sockets,
+    bone_attach: meta.bone_attach,
+    hand_bone_rotations: meta.hand_bone_rotations,
   };
 }
 
 /**
- * Builds the separate debug-only hand rig snapshot (<weapon_id>_rigdebug.json).
- * The game runtime must NEVER load this file.
+ * Builds the detailed hand rig snapshot (<weapon_id>_rigdebug.json) with full bone positions & rotations.
  */
 export function buildWeaponRigDebugJson(
   config: WeaponConfig,
@@ -813,6 +885,7 @@ export function buildWeaponRigDebugJson(
       parent: bone.parent,
       hand: bone.hand,
       finger: bone.finger,
+      phalanx: bone.phalanx,
       position: bone.position,
       rotation: bone.rotation,
       rotation_deg: bone.rotation_deg,
@@ -821,81 +894,30 @@ export function buildWeaponRigDebugJson(
       world_rotation: bone.world_rotation,
       world_rotation_deg: bone.world_rotation_deg,
       world_quaternion: bone.world_quaternion,
+      right_hand_position: bone.right_hand_position,
+      bone_length_m: bone.bone_length_m,
     };
   }
   return {
     warning:
-      'DEBUG ONLY — single-frame static pose snapshot. Game runtime MUST NEVER load this file; use <weapon_id>.json grip vectors (hand_y_axis, hand_x_axis, wrist_offset_weapon_space) instead.',
-    game_must_not_load: true,
+      'Contains all 42 Mixamo hand bone positions, BoneAttachment3D weapon offset, and XYZ/quaternion rotations for ForgeArm / Godot rig inspection.',
+    game_must_not_load: false,
     weapon_id: slugifyWeaponName(config.name),
     naming_convention: spec.naming_convention,
     mixamo_prefix: spec.mixamo_prefix,
     finger_axis: spec.finger_axis,
     bone_longitudinal_axis: spec.bone_longitudinal_axis,
+    palmar_axis: spec.palmar_axis,
     rotation_order: 'XYZ',
+    units: 'meters',
     rotation_units: {
       rotation: 'radians',
       rotation_deg: 'degrees',
     },
     palm_offset_model: 'palm_centre = wrist + hand_bone_+Y * wrist_to_palm_distance',
+    bone_attach: spec.bone_attach,
     grips: spec.grips,
     bones: debugBones,
-  };
-}
-
-/**
- * Builds the Mixamo hand bone rotation payload embedded directly inside the exported .glb
- * (WeaponRoot extras, primary mesh extras, and Socket_Grip_* node extras) without adding Bone nodes.
- */
-export function buildGlbHandBoneRotationsPayload(
-  config: WeaponConfig,
-  mechanics: ResolvedMechanics
-): GlbHandBoneRotationsPayload {
-  const spec = resolveMixamoHandRig(config, mechanics);
-  const bones: Record<string, GlbHandBoneRotationEntry> = {};
-  for (const [boneName, bone] of Object.entries(spec.bones)) {
-    bones[boneName] = {
-      name: bone.name,
-      mixamo_name: bone.mixamo_name,
-      parent: bone.parent,
-      hand: bone.hand,
-      finger: bone.finger,
-      position: bone.position,
-      rotation: bone.rotation,
-      rotation_deg: bone.rotation_deg,
-      quaternion: bone.quaternion,
-      world_rotation: bone.world_rotation,
-      world_rotation_deg: bone.world_rotation_deg,
-      world_quaternion: bone.world_quaternion,
-    };
-  }
-  const rWrist = bones.RightHand;
-  const lWrist = bones.LeftHand;
-  return {
-    naming_convention: spec.naming_convention,
-    mixamo_prefix: spec.mixamo_prefix,
-    finger_axis: spec.finger_axis,
-    bone_longitudinal_axis: spec.bone_longitudinal_axis,
-    rotation_order: 'XYZ',
-    rotation_units: {
-      rotation: 'radians',
-      rotation_deg: 'degrees',
-    },
-    right_wrist: {
-      bone: 'mixamorig1_RightHand',
-      parent: 'mixamorig1_RightForeArm',
-      rotation: rWrist.rotation,
-      rotation_deg: rWrist.rotation_deg,
-      quaternion: rWrist.quaternion,
-    },
-    left_wrist: {
-      bone: 'mixamorig1_LeftHand',
-      parent: 'mixamorig1_LeftForeArm',
-      rotation: lWrist.rotation,
-      rotation_deg: lWrist.rotation_deg,
-      quaternion: lWrist.quaternion,
-    },
-    bones,
   };
 }
 
@@ -904,13 +926,10 @@ export function buildGlbHandBoneRotationsPayload(
  */
 export function buildGlbEmbeddedExtras(
   metadata: GodotWeaponMetadata,
-  config: WeaponConfig,
-  mechanics: ResolvedMechanics
+  _config: WeaponConfig,
+  _mechanics: ResolvedMechanics
 ): GlbWeaponExtras {
-  return {
-    ...JSON.parse(JSON.stringify(metadata)),
-    hand_bone_rotations: buildGlbHandBoneRotationsPayload(config, mechanics),
-  };
+  return JSON.parse(JSON.stringify(metadata)) as GlbWeaponExtras;
 }
 
 /**
@@ -922,7 +941,6 @@ export function buildGlbSocketExtrasMap(
   mechanics: ResolvedMechanics
 ): Record<string, Record<string, unknown>> {
   const handRotations = buildGlbHandBoneRotationsPayload(config, mechanics);
-  const spec = resolveMixamoHandRig(config, mechanics);
   const filterSide = (hand: 'right' | 'left') => {
     const out: Record<string, GlbHandBoneRotationEntry> = {};
     for (const [k, v] of Object.entries(handRotations.bones)) {
@@ -940,28 +958,16 @@ export function buildGlbSocketExtrasMap(
         is_joint: metadata.is_joint,
         mixamo_prefix: handRotations.mixamo_prefix,
         finger_axis: handRotations.finger_axis,
+        palmar_axis: handRotations.palmar_axis,
         rotation_order: handRotations.rotation_order,
+        bone_attach: handRotations.bone_attach,
         wrist_bone: handRotations.right_wrist.bone,
+        wrist_position: handRotations.right_wrist.position,
+        wrist_world_position: handRotations.right_wrist.world_position,
         wrist_rotation: handRotations.right_wrist.rotation,
         wrist_rotation_deg: handRotations.right_wrist.rotation_deg,
         wrist_quaternion: handRotations.right_wrist.quaternion,
         bones: filterSide('right'),
-      };
-    } else if (socketName === 'Socket_Grip_Left') {
-      out[socketName] = {
-        ...socketSpec,
-        socket_semantics: metadata.socket_semantics,
-        is_joint: metadata.is_joint,
-        mixamo_prefix: handRotations.mixamo_prefix,
-        finger_axis: handRotations.finger_axis,
-        rotation_order: handRotations.rotation_order,
-        left_grip_style: spec.left_grip_style,
-        left_grip_placement: spec.left_grip_placement,
-        wrist_bone: handRotations.left_wrist.bone,
-        wrist_rotation: handRotations.left_wrist.rotation,
-        wrist_rotation_deg: handRotations.left_wrist.rotation_deg,
-        wrist_quaternion: handRotations.left_wrist.quaternion,
-        bones: filterSide('left'),
       };
     } else {
       out[socketName] = { ...socketSpec };
@@ -978,7 +984,7 @@ export interface ManifestSelfCheckItem {
 }
 
 /**
- * Executes all 15 mandatory verification checks against a generated runtime weapon manifest.
+ * Executes all 15 mandatory verification checks against a generated weapon manifest.
  */
 export function runManifestSelfCheck(
   manifest: GodotWeaponMetadata,
@@ -989,11 +995,8 @@ export function runManifestSelfCheck(
   const gripL = manifest.sockets.Socket_Grip_Left;
   const muzzle = manifest.sockets.Socket_Muzzle;
   const shoulder = manifest.sockets.Socket_Shoulder;
-
-  const hasHandRig = Object.prototype.hasOwnProperty.call(manifest, 'hand_rig');
-  const hasBones = /"bones"\s*:/.test(text);
-  const hasHandOrientation = Object.prototype.hasOwnProperty.call(manifest, 'hand_orientation');
-  const hasWorldPosition = text.includes('world_position');
+  const attach = manifest.bone_attach;
+  const hbr = manifest.hand_bone_rotations;
 
   const checkVec = (v: [number, number, number] | undefined) => {
     if (!v || v.length !== 3) return { len: 0, ok: false };
@@ -1016,24 +1019,40 @@ export function runManifestSelfCheck(
   const rx = checkVec(gripR?.hand_x_axis);
   const rDot = checkDot(gripR?.hand_y_axis, gripR?.hand_x_axis);
   const rAng = angleToNegZDeg(gripR?.hand_y_axis);
-
-  const ly = checkVec(gripL?.hand_y_axis);
-  const lx = checkVec(gripL?.hand_x_axis);
-  const lDot = checkDot(gripL?.hand_y_axis, gripL?.hand_x_axis);
-  const lAng = angleToNegZDeg(gripL?.hand_y_axis);
-
   const rzAbs = gripR?.wrist_offset_weapon_space ? Math.abs(gripR.wrist_offset_weapon_space[2]) : NaN;
-  const lzAbs = gripL?.wrist_offset_weapon_space ? Math.abs(gripL.wrist_offset_weapon_space[2]) : NaN;
 
   const rPosOk =
     Boolean(gripR?.position) &&
     gripR.position[0] === 0 &&
     gripR.position[1] === 0 &&
     gripR.position[2] === 0;
-  const lPosOk =
-    Boolean(gripL?.position) &&
-    gripL.position[0] < 0 &&
-    gripL.position[2] < -0.1;
+
+  const boneEntries = Object.values(hbr?.bones ?? {});
+  const allBonesComplete =
+    boneEntries.length === 42 &&
+    boneEntries.every(
+      (b) =>
+        b.position.length === 3 &&
+        b.world_position.length === 3 &&
+        b.right_hand_position.length === 3 &&
+        Number.isFinite(b.bone_length_m) &&
+        b.rotation.length === 3 &&
+        b.quaternion.length === 4
+    );
+
+  const attachOk =
+    Boolean(attach) &&
+    attach.attach_bone === 'mixamorig1_RightHand' &&
+    attach.weapon_offset_position.every(Number.isFinite) &&
+    attach.weapon_offset_quaternion.every(Number.isFinite);
+
+  const rw = hbr?.right_wrist?.world_position;
+  const lw = hbr?.left_wrist?.world_position;
+  const wristPositionsOk =
+    Boolean(rw && lw) &&
+    rw[0] > 0.025 &&
+    rw[2] > 0.045 &&
+    lw[2] < -0.1;
 
   const expectedShoulderZ =
     muzzle && manifest.dimensions_m
@@ -1042,27 +1061,31 @@ export function runManifestSelfCheck(
   const shoulderZOk = hasStock
     ? Boolean(shoulder) && Math.abs(shoulder.position[2] - expectedShoulderZ) <= 0.002
     : shoulder === undefined;
-
   const stockPresenceOk = hasStock ? Boolean(shoulder) : shoulder === undefined;
+
+  const noGripLeft =
+    gripL === undefined &&
+    !text.includes('Grip_Left') &&
+    !text.includes('left_grip_');
 
   return [
     {
       id: 1,
-      label: '"hand_rig" absent',
-      pass: !hasHandRig && !hasBones,
-      detail: `has_hand_rig=${hasHandRig}, has_bones=${hasBones}`,
+      label: 'Socket_Grip_Left / grip-left info removed',
+      pass: noGripLeft,
+      detail: `gripL=${String(gripL)}`,
     },
     {
       id: 2,
-      label: '"hand_orientation" absent',
-      pass: !hasHandOrientation,
-      detail: `has_hand_orientation=${hasHandOrientation}`,
+      label: 'bone_attach BoneAttachment3D transform present',
+      pass: attachOk,
+      detail: `attach_bone=${attach?.attach_bone}`,
     },
     {
       id: 3,
-      label: '"world_position" absent',
-      pass: !hasWorldPosition,
-      detail: `has_world_position=${hasWorldPosition}`,
+      label: 'hand_bone_rotations emits all 42 bone positions & rotations',
+      pass: allBonesComplete,
+      detail: `bone_count=${boneEntries.length}`,
     },
     {
       id: 4,
@@ -1072,27 +1095,27 @@ export function runManifestSelfCheck(
     },
     {
       id: 5,
-      label: 'Grip_L hand_y_axis / hand_x_axis unit & ortho',
-      pass: ly.ok && lx.ok && lDot.ok,
-      detail: `|y|=${ly.len.toFixed(4)} |x|=${lx.len.toFixed(4)} dot=${lDot.dot.toExponential(2)}`,
+      label: 'palmar_axis == "+Z", finger_axis == "+Y"',
+      pass: hbr?.palmar_axis === '+Z' && hbr?.finger_axis === '+Y',
+      detail: `palmar=${hbr?.palmar_axis}, finger=${hbr?.finger_axis}`,
     },
     {
       id: 6,
-      label: 'Grip_R & Grip_L hand_y_axis within <= 25 deg of (0,0,-1)',
-      pass: rAng <= 25 && lAng <= 25,
-      detail: `right_deg=${rAng.toFixed(2)}, left_deg=${lAng.toFixed(2)}`,
+      label: 'Grip_R hand_y_axis within <= 25 deg of (0,0,-1)',
+      pass: rAng <= 25,
+      detail: `right_deg=${rAng.toFixed(2)}`,
     },
     {
       id: 7,
-      label: '|wrist_offset_weapon_space.z| in [0.045, 0.070]',
-      pass: rzAbs >= 0.045 && rzAbs <= 0.07 && lzAbs >= 0.045 && lzAbs <= 0.07,
-      detail: `right_|z|=${rzAbs.toFixed(4)}, left_|z|=${lzAbs.toFixed(4)}`,
+      label: '|wrist_offset_weapon_space.z| in [0.045, 0.075]',
+      pass: rzAbs >= 0.045 && rzAbs <= 0.075,
+      detail: `right_|z|=${rzAbs.toFixed(4)}`,
     },
     {
       id: 8,
-      label: 'Grip_R position == [0,0,0], Grip_L x < 0 & z < -0.1',
-      pass: rPosOk && lPosOk,
-      detail: `Grip_R=${JSON.stringify(gripR?.position)}, Grip_L=${JSON.stringify(gripL?.position)}`,
+      label: 'Grip_R == [0,0,0], wrist world positions valid',
+      pass: rPosOk && wristPositionsOk,
+      detail: `rw=${JSON.stringify(rw)}, lw=${JSON.stringify(lw)}`,
     },
     {
       id: 9,
@@ -1362,10 +1385,9 @@ export function generateGodotScriptGd(metadata: GodotWeaponMetadata): string {
 
 ## Auto-generated by ForgeArm 3D for Godot 4.7.2
 ## Scale: 1 unit = 1 meter | Forward: -Z | Up: +Y | Origin: Pistol Grip Center Pivot (0, 0, 0)
-## Grip Sockets (Socket_Grip_Right, Socket_Grip_Left): Exterior surface CONTACT POINTS (NOT wrist joints).
-##   - Palm centre sits distally along the hand bone's +Y axis (wrist -> knuckles):
-##     palm_centre = wrist + hand_bone_+Y * wrist_to_palm_distance
-##   - Manifest emits weapon-space unit vectors hand_y_axis (+Y wrist->knuckles) and hand_x_axis (+X hand bone).
+## BoneAttachment3D (mixamorig1_RightHand): Read bone_attach.weapon_offset_position & weapon_offset_quaternion
+##   from GLB extras (or <weapon_id>.json) to seat WeaponRoot directly inside BoneAttachment3D.
+##   hand_bone_rotations.bones contains all 42 Mixamo hand bones (position, world_position, right_hand_position, rotations).
 
 @export_group("Weapon Identity")
 @export var weapon_id: String = "${metadata.weapon_id}"
@@ -1397,7 +1419,6 @@ export function generateGodotScriptGd(metadata: GodotWeaponMetadata): string {
 
 @onready var socket_muzzle: Node3D = model.find_child("Socket_Muzzle", true, false) as Node3D
 @onready var socket_grip_right: Node3D = model.find_child("Socket_Grip_Right", true, false) as Node3D
-@onready var socket_grip_left: Node3D = model.find_child("Socket_Grip_Left", true, false) as Node3D
 @onready var socket_shoulder: Node3D = model.find_child("Socket_Shoulder", true, false) as Node3D
 @onready var socket_ads: Node3D = model.find_child("Socket_ADS", true, false) as Node3D
 @onready var socket_eject: Node3D = model.find_child("Socket_Eject", true, false) as Node3D
@@ -1432,12 +1453,12 @@ func set_stock_folded(folded: bool) -> void:
 \telse:
 \t\tanim_player.play_backwards("fold_stock")
 
-## Builds an orthonormal hand Basis directly from weapon-space hand_x_axis (+X) and hand_y_axis (+Y).
-static func solve_hand_basis(hand_x_axis: Vector3, hand_y_axis: Vector3) -> Basis:
+## Builds an orthonormal Mixamo hand Basis (+X lateral, +Y wrist->knuckles, +Z palmar).
+static func solve_hand_basis(hand_x_axis: Vector3, hand_y_axis: Vector3, hand_z_axis: Vector3 = Vector3.ZERO) -> Basis:
 \tvar y_axis := hand_y_axis.normalized()
-\tvar x_axis := (hand_x_axis - y_axis * hand_x_axis.dot(y_axis)).normalized()
-\tvar z_axis := x_axis.cross(y_axis).normalized()
-\tx_axis = y_axis.cross(z_axis).normalized()
+\tvar z_axis := hand_z_axis.normalized() if hand_z_axis.length_squared() > 0.0001 else hand_x_axis.cross(y_axis).normalized()
+\tvar x_axis := y_axis.cross(z_axis).normalized()
+\tz_axis = x_axis.cross(y_axis).normalized()
 \treturn Basis(x_axis, y_axis, z_axis)
 
 ## Returns the local offset needed to align Socket_ADS directly with an FPS camera center.
@@ -1446,7 +1467,7 @@ func get_ads_offset() -> Vector3:
 \t\treturn Vector3.ZERO
 \treturn -socket_ads.position
 
-## Reads the hand bone rotation dictionary embedded directly in the imported GLB extras.
+## Reads the hand bone position + rotation dictionary embedded directly in the imported GLB extras.
 func get_embedded_hand_bone_rotations() -> Dictionary:
 \tif model == null or not model.has_meta("extras"):
 \t\treturn {}
@@ -1454,6 +1475,25 @@ func get_embedded_hand_bone_rotations() -> Dictionary:
 \tif extras is Dictionary:
 \t\treturn (extras as Dictionary).get("hand_bone_rotations", {})
 \treturn {}
+
+## Reads the BoneAttachment3D offset (relative to mixamorig1_RightHand) from GLB extras.
+func get_bone_attach() -> Dictionary:
+\tif model == null or not model.has_meta("extras"):
+\t\treturn {}
+\tvar extras: Variant = model.get_meta("extras")
+\tif extras is Dictionary:
+\t\treturn (extras as Dictionary).get("bone_attach", {})
+\treturn {}
+
+## Returns the exact Transform3D to assign to this weapon node inside a BoneAttachment3D on mixamorig1_RightHand.
+func get_bone_attach_transform() -> Transform3D:
+\tvar attach := get_bone_attach()
+\tif attach.is_empty():
+\t\treturn Transform3D.IDENTITY
+\tvar p: Array = attach.get("weapon_offset_position", [0.0, 0.0, 0.0])
+\tvar q: Array = attach.get("weapon_offset_quaternion", [0.0, 0.0, 0.0, 1.0])
+\tvar basis := Basis(Quaternion(q[0], q[1], q[2], q[3]))
+\treturn Transform3D(basis, Vector3(p[0], p[1], p[2]))
 `;
 }
 

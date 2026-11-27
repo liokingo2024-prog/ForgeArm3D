@@ -699,6 +699,13 @@ export class WeaponEngine {
       const r = Math.round(v * 1e4) / 1e4;
       return Object.is(r, -0) ? 0 : r;
     };
+    const position = (bone?.userData.position as [number, number, number] | undefined) ?? [
+      round4(bone?.position.x ?? 0),
+      round4(bone?.position.y ?? 0),
+      round4(bone?.position.z ?? 0),
+    ];
+    const worldPosition =
+      (bone?.userData.world_position as [number, number, number] | undefined) ?? position;
     const rotationRad = (bone?.userData.rotation as [number, number, number] | undefined) ?? [
       round4(bone?.rotation.x ?? 0),
       round4(bone?.rotation.y ?? 0),
@@ -725,6 +732,8 @@ export class WeaponEngine {
       hand,
       screenX: e.clientX - rect.left,
       screenY: e.clientY - rect.top,
+      position,
+      worldPosition,
       rotationRad,
       rotationDeg,
       worldRotationDeg,
@@ -1101,18 +1110,17 @@ export class WeaponEngine {
     obj: THREE.Object3D;
     shortLabel: string;
     color: string;
-    axisDir?: 'forward' | 'eject' | 'grip_right' | 'grip_left';
+    axisDir?: 'forward' | 'eject' | 'grip_right';
   }> {
     if (!this.rig) return [];
     const list: Array<{
       obj: THREE.Object3D;
       shortLabel: string;
       color: string;
-      axisDir?: 'forward' | 'eject' | 'grip_right' | 'grip_left';
+      axisDir?: 'forward' | 'eject' | 'grip_right';
     }> = [
       { obj: this.rig.socketMuzzle, shortLabel: 'Muzzle', color: '#f59e0b', axisDir: 'forward' },
       { obj: this.rig.socketGripRight, shortLabel: 'Grip_Right', color: '#10b981', axisDir: 'grip_right' },
-      { obj: this.rig.socketGripLeft, shortLabel: 'Grip_Left', color: '#06b6d4', axisDir: 'grip_left' },
       { obj: this.rig.socketAds, shortLabel: 'ADS', color: '#a855f7', axisDir: 'forward' },
       { obj: this.rig.socketEject, shortLabel: 'Eject', color: '#f43f5e', axisDir: 'eject' },
       { obj: this.rig.socketMag, shortLabel: 'Mag', color: '#3b82f6' },
@@ -1129,7 +1137,7 @@ export class WeaponEngine {
 
   private buildSocketGizmoObject(
     color: string,
-    axisDir?: 'forward' | 'eject' | 'grip_right' | 'grip_left'
+    axisDir?: 'forward' | 'eject' | 'grip_right'
   ): THREE.Group {
     const g = new THREE.Group();
     const dot = new THREE.Mesh(
@@ -1151,11 +1159,9 @@ export class WeaponEngine {
         ? 0.044
         : axisDir === 'grip_right'
           ? 0.042
-          : axisDir === 'grip_left'
-            ? -0.042
-            : len;
-    const upLen = axisDir === 'grip_right' || axisDir === 'grip_left' ? 0.036 : len;
-    const fwdLen = axisDir === 'forward' ? 0.046 : axisDir === 'grip_right' || axisDir === 'grip_left' ? 0.036 : len;
+          : len;
+    const upLen = axisDir === 'grip_right' ? 0.036 : len;
+    const fwdLen = axisDir === 'forward' ? 0.046 : axisDir === 'grip_right' ? 0.036 : len;
     const positions = new Float32Array([
       0, 0, 0, xLen, 0, 0,
       0, 0, 0, 0, upLen, 0,
@@ -1333,39 +1339,6 @@ export class WeaponEngine {
     }
   }
 
-  private getLeftGripOverlayLabel(): string {
-    const m = this.currentMechanics;
-    if (!m) return 'Handguard';
-    const placementTag =
-      m.leftGripPlacement === 'rear_of_attachment'
-        ? 'Rear'
-        : m.leftGripPlacement === 'front_of_attachment'
-          ? 'Front'
-          : m.leftGripPlacement === 'wrapped_attachment'
-            ? 'Clear'
-            : null;
-    switch (m.effectiveUnderbarrel) {
-      case 'vertical_grip':
-        return 'Vertical Grip';
-      case 'angled_grip':
-        return 'Angled AFG';
-      case 'handstop_kit':
-        return 'Handstop Pocket';
-      case 'grenade_launcher':
-        return '40mm M203';
-      case 'masterkey_shotgun':
-        return 'Masterkey Pump';
-      case 'tactical_light':
-        return `Scout Light (${placementTag ?? 'Clear'})`;
-      case 'tactical_laser':
-        return `PEQ-15 (${placementTag ?? 'Clear'})`;
-      case 'bipod':
-        return `Bipod (${placementTag ?? 'Clear'})`;
-      case 'none':
-        return m.leftGripPlacement === 'bare_barrel' ? 'Bare Barrel' : 'Handguard';
-    }
-  }
-
   private syncRigGizmosAndProject(): void {
     if (!this.rig || !this.rigOverlayEnabled) return;
     this.rig.root.updateMatrixWorld(true);
@@ -1408,10 +1381,9 @@ export class WeaponEngine {
       };
     });
 
-    const leftModeLabel = this.getLeftGripOverlayLabel();
     for (const [wristName, label, color] of [
       ['RightHand', `${MIXAMO_BONE_PREFIX}RightHand`, '#34d399'],
-      ['LeftHand', `${MIXAMO_BONE_PREFIX}LeftHand · ${leftModeLabel}`, '#22d3ee'],
+      ['LeftHand', `${MIXAMO_BONE_PREFIX}LeftHand`, '#22d3ee'],
     ] as const) {
       const wrist = this.rig.handBones.get(wristName);
       if (!wrist) continue;

@@ -27,7 +27,6 @@ export interface BuiltWeaponRig {
   handBones: Map<string, THREE.Bone>;
   socketMuzzle: THREE.Object3D;
   socketGripRight: THREE.Object3D;
-  socketGripLeft: THREE.Object3D;
   socketShoulder: THREE.Object3D | null;
   socketAds: THREE.Object3D;
   socketEject: THREE.Object3D;
@@ -4620,10 +4619,6 @@ export function buildWeaponSceneGraph(
   socketGripRight.name = 'Socket_Grip_Right';
   socketGripRight.position.set(m.socketHandRPos.x, m.socketHandRPos.y, m.socketHandRPos.z);
 
-  const socketGripLeft = new THREE.Object3D();
-  socketGripLeft.name = 'Socket_Grip_Left';
-  socketGripLeft.position.set(m.socketHandLPos.x, m.socketHandLPos.y, m.socketHandLPos.z);
-
   const socketAds = new THREE.Object3D();
   socketAds.name = 'Socket_ADS';
   socketAds.position.set(m.socketAdsPos.x, m.socketAdsPos.y, m.socketAdsPos.z);
@@ -4643,7 +4638,6 @@ export function buildWeaponSceneGraph(
   root.add(
     socketMuzzle,
     socketGripRight,
-    socketGripLeft,
     socketAds,
     socketEject,
     socketMag,
@@ -4686,13 +4680,7 @@ export function buildWeaponSceneGraph(
       naming_convention: 'mixamo',
       mixamo_prefix: MIXAMO_BONE_PREFIX,
       side: side.toLowerCase(),
-      grip_style: side === 'Right' ? handRigSpec.right_grip_style : handRigSpec.left_grip_style,
-      ...(side === 'Left'
-        ? {
-            underbarrel_variant: handRigSpec.underbarrel_variant,
-            left_grip_placement: handRigSpec.left_grip_placement,
-          }
-        : {}),
+      ...(side === 'Right' ? { grip_style: handRigSpec.right_grip_style } : {}),
     };
 
     const createBone = (boneName: string): THREE.Bone => {
@@ -4704,6 +4692,10 @@ export function buildWeaponSceneGraph(
         hand: spec.hand,
         finger: spec.finger,
         phalanx: spec.phalanx,
+        position: spec.position,
+        world_position: spec.world_position,
+        right_hand_position: spec.right_hand_position,
+        bone_length_m: spec.bone_length_m,
         rotation: spec.rotation,
         rotation_deg: spec.rotation_deg,
         quaternion: spec.quaternion,
@@ -4791,7 +4783,6 @@ export function buildWeaponSceneGraph(
     handBones,
     socketMuzzle,
     socketGripRight,
-    socketGripLeft,
     socketShoulder,
     socketAds,
     socketEject,

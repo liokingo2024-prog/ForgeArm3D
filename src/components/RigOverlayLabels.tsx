@@ -78,6 +78,18 @@ export function RigOverlayLabels({ nodes, hoveredBone }: Props) {
             <span className="ml-1.5 text-[#8A95A8]">({hoveredBone.name})</span>
           </div>
           <div className="text-[10px] text-[#B8C2D4]">
+            Local Pos (m):{' '}
+            <span className="text-[#F3F5F8]">
+              [{hoveredBone.position.map((v) => v.toFixed(4)).join(', ')}]
+            </span>
+          </div>
+          <div className="text-[10px] text-[#B8C2D4]">
+            Weapon Pos (m):{' '}
+            <span className="text-[#F3F5F8]">
+              [{hoveredBone.worldPosition.map((v) => v.toFixed(4)).join(', ')}]
+            </span>
+          </div>
+          <div className="text-[10px] text-[#B8C2D4]">
             Local Rot (XYZ): <span className="text-[#F3F5F8]">{fmtDeg(hoveredBone.rotationDeg)}</span>
           </div>
           <div className="text-[10px] text-[#B8C2D4]">

@@ -522,7 +522,7 @@ export default function App() {
     void recordExportActivity().catch((err) => {
       console.error('Failed to record export count:', err);
     });
-    addToast(`Saved ${slug}.json (Godot 4.7.2 metadata & stats)`, 'success');
+    addToast(`Saved ${slug}.json (bone positions, bone_attach & Godot 4.7.2 stats)`, 'success');
   }, [addToast, recordExportActivity]);
 
   const handleSaveJSON = useCallback(() => {
